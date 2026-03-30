@@ -1107,6 +1107,120 @@ def draft_sim(opt_target: OptionalTargetParam = None, _connection=None):
 
 import interactions.base.super_interaction
 from event_testing.results import TestResult
+import sims4.localization
+
+# The localized string ID for "Vote on Neighborhood Action Plans" or just "Vote"
+# "Vote" is often 0x3D72B8B3 or similar. We will use a generic string ID.
+VOTE_STRING_ID = 0xD7C78E29 # "Vote" from City Living/Eco Lifestyle context
+
+class DictatorElectionInteraction(interactions.base.super_interaction.SuperInteraction):
+    @classmethod
+    def _test(cls, target, context, **kwargs):
+        # Only the Dictator can initiate this special election on the board
+        global current_dictator_id
+        if current_dictator_id is None or context.sim.id != current_dictator_id:
+            return TestResult(False, "Only the Dictator can hold the election.")
+        return TestResult.TRUE
+
+    def get_name(self, target=None, context=None, **kwargs):
+        # Hack to return a localized string instead of blank text
+        return sims4.localization._create_localized_string(VOTE_STRING_ID)
+
+    def _run_interaction_gen(self, timeline):
+        # We wrap the election logic in a generator because Interactions run as tasks
+        global current_dictator_id, dictator_reputation
+
+        sims4.commands.output("Election interaction started on the board!", sims4.commands.CheatOutput(_connection=None))
+
+        sim_info_manager = services.sim_info_manager()
+
+        dictator_info = sim_info_manager.get(current_dictator_id)
+        if dictator_info is None:
+            return False
+
+        # Find Celebrity Politician
+        FAME_STAT_ID = 188229
+        import sims4.resources
+        stat_manager = services.get_instance_manager(sims4.resources.Types.STATISTIC)
+        fame_tuning = stat_manager.get(FAME_STAT_ID)
+
+        celebrity_politician = None
+        highest_fame = -1
+
+        for sim_info in sim_info_manager.values():
+            if sim_info.id == current_dictator_id or sim_info.age not in (Age.YOUNGADULT, Age.ADULT, Age.ELDER):
+                continue
+
+            fame_val = 0
+            if fame_tuning is not None and sim_info.statistic_tracker is not None:
+                stat_inst = sim_info.statistic_tracker.get_statistic(fame_tuning)
+                if stat_inst is not None:
+                    fame_val = stat_inst.get_value()
+
+            if fame_val > highest_fame:
+                highest_fame = fame_val
+                celebrity_politician = sim_info
+
+        if celebrity_politician is None:
+            valid_adults = [s for s in sim_info_manager.values() if s.id != current_dictator_id and s.age in (Age.YOUNGADULT, Age.ADULT, Age.ELDER)]
+            if valid_adults:
+                celebrity_politician = random.choice(valid_adults)
+            else:
+                sims4.commands.output("Not enough Sims to hold an election.", sims4.commands.CheatOutput(_connection=None))
+                return False
+
+        sims4.commands.output(f"ELECTION DAY: {dictator_info.full_name} (Dictatorship) vs {celebrity_politician.full_name} (Celebrity Politician)!", sims4.commands.CheatOutput(_connection=None))
+
+        dictator_votes = 0
+        politician_votes = 0
+        voters = [s for s in sim_info_manager.values() if s.age in (Age.TEEN, Age.YOUNGADULT, Age.ADULT, Age.ELDER)]
+
+        for voter in voters:
+            if voter.id == current_dictator_id:
+                dictator_votes += 1
+                continue
+            if voter.id == celebrity_politician.id:
+                politician_votes += 1
+                continue
+
+            eco_footprint_score = 0
+            if voter.statistic_tracker is not None:
+                eco_stat = stat_manager.get(231429)
+                if eco_stat is not None:
+                    stat_inst = voter.statistic_tracker.get_statistic(eco_stat)
+                    if stat_inst is not None:
+                        val = stat_inst.get_value()
+                        if val < -100: eco_footprint_score = -1
+                        elif val > 100: eco_footprint_score = 1
+
+            if eco_footprint_score == 0 and random.random() < 0.4:
+                eco_footprint_score = random.choice([-1, 1])
+
+            vote_dictator_chance = 0.50
+            if dictator_reputation > 30: vote_dictator_chance += 0.15
+            elif dictator_reputation < -30: vote_dictator_chance -= 0.15
+
+            if eco_footprint_score == -1: vote_dictator_chance += 0.35
+            elif eco_footprint_score == 1: vote_dictator_chance -= 0.35
+
+            vote_dictator_chance = max(0.05, min(0.95, vote_dictator_chance))
+
+            if random.random() < vote_dictator_chance:
+                dictator_votes += 1
+            else:
+                politician_votes += 1
+
+        sims4.commands.output(f"RESULTS: {dictator_votes} votes for {dictator_info.full_name}, {politician_votes} votes for {celebrity_politician.full_name}.", sims4.commands.CheatOutput(_connection=None))
+
+        if dictator_votes >= politician_votes:
+            sims4.commands.output(f"VICTORY! The Dictatorship remains in power. (Reputation +20)", sims4.commands.CheatOutput(_connection=None))
+            dictator_reputation += 20
+        else:
+            sims4.commands.output(f"DEFEAT! The Celebrity Politician {celebrity_politician.full_name} won the popular vote! The Dictator was overthrown.", sims4.commands.CheatOutput(_connection=None))
+            current_dictator_id = None
+
+        return True
+        yield
 
 @inject_method(interactions.base.super_interaction.SuperInteraction, 'test')
 def _hook_super_interaction_test(original_function, self, *args, **kwargs):
@@ -1138,6 +1252,172 @@ def _hook_super_interaction_test(original_function, self, *args, **kwargs):
                 return TestResult.TRUE
 
     return result
+
+_interaction_injected = False
+
+@inject_method(zone.Zone, 'do_zone_spin_up')
+def _hook_zone_spin_up_for_interaction(original_function, self, *args, **kwargs):
+    result = original_function(self, *args, **kwargs)
+
+    global _interaction_injected
+    if not _interaction_injected:
+        import sims4.resources
+        object_manager = services.get_instance_manager(sims4.resources.Types.OBJECT)
+        # Tuning IDs for Community Board (236746) and Mailbox (14757)
+        board_tuning = object_manager.get(236746)
+        mailbox_tuning = object_manager.get(14757)
+
+        if board_tuning is not None:
+            # We must convert the immutable tuple to a list to append, then back to tuple
+            affordances = list(board_tuning._super_affordances)
+            if DictatorElectionInteraction not in affordances:
+                affordances.append(DictatorElectionInteraction)
+                board_tuning._super_affordances = tuple(affordances)
+
+        if mailbox_tuning is not None:
+            affordances = list(mailbox_tuning._super_affordances)
+            if DictatorElectionInteraction not in affordances:
+                affordances.append(DictatorElectionInteraction)
+                mailbox_tuning._super_affordances = tuple(affordances)
+
+        _interaction_injected = True
+
+    return result
+
+@sims4.commands.Command('dictator.hold_election', command_type=sims4.commands.CommandType.Live)
+def hold_election(_connection=None):
+    """Holds a simulated election between the Dictatorship and a Celebrity 'Normal Politician'."""
+    output = sims4.commands.CheatOutput(_connection)
+    global current_dictator_id, dictator_reputation
+
+    sim_info_manager = services.sim_info_manager()
+
+    # 1. Determine the Dictator candidate
+    if current_dictator_id is None:
+        client = services.client_manager().get_first_client()
+        if client and client.active_sim:
+            current_dictator_id = client.active_sim.id
+            dictator_reputation = 0
+            output(f"{client.active_sim.full_name} has stepped up to run as the Dictator candidate.")
+        else:
+            output("No active Sim to run for Dictator.")
+            return False
+
+    dictator_info = sim_info_manager.get(current_dictator_id)
+    if dictator_info is None:
+        output("Dictator candidate not found in world.")
+        return False
+
+    # 2. Find the Celebrity "Normal Politician" (highest fame)
+    # Fame is a ranked statistic in Get Famous. Statistic ID: 188229 (rankedStatistic_Celebrity)
+    FAME_STAT_ID = 188229
+    import sims4.resources
+    stat_manager = services.get_instance_manager(sims4.resources.Types.STATISTIC)
+    fame_tuning = stat_manager.get(FAME_STAT_ID)
+
+    celebrity_politician = None
+    highest_fame = -1
+
+    for sim_info in sim_info_manager.values():
+        if sim_info.id == current_dictator_id or sim_info.age not in (Age.YOUNGADULT, Age.ADULT, Age.ELDER):
+            continue
+
+        fame_val = 0
+        if fame_tuning is not None and sim_info.statistic_tracker is not None:
+            stat_inst = sim_info.statistic_tracker.get_statistic(fame_tuning)
+            if stat_inst is not None:
+                fame_val = stat_inst.get_value()
+
+        if fame_val > highest_fame:
+            highest_fame = fame_val
+            celebrity_politician = sim_info
+
+    if celebrity_politician is None:
+        # Fallback: Just pick a random adult
+        valid_adults = [s for s in sim_info_manager.values() if s.id != current_dictator_id and s.age in (Age.YOUNGADULT, Age.ADULT, Age.ELDER)]
+        if valid_adults:
+            celebrity_politician = random.choice(valid_adults)
+        else:
+            output("Not enough Sims in the world to hold an election.")
+            return False
+
+    output(f"ELECTION DAY: {dictator_info.full_name} (Dictatorship) vs {celebrity_politician.full_name} (Celebrity Politician)!")
+
+    # 3. Simulate the Voting Process
+    # Eco Footprint Global/Neighborhood ID. In Eco Lifestyle, street eco footprint is commonly ID 231428.
+    # Individual Sim eco footprint contribution is 231429. We will use the Sim's individual trait/stat if available,
+    # or simulate it based on their traits.
+    # For a prototype, since parsing exact Eco Footprint values requires Eco Lifestyle installed,
+    # we will mock the eco footprint based on their traits (e.g. Green Fiend vs Recycle Disciple vs random)
+    # and heavily weight it towards the Dictator if the overall world is industrial, or use a random assignment.
+
+    dictator_votes = 0
+    politician_votes = 0
+
+    voters = [s for s in sim_info_manager.values() if s.age in (Age.TEEN, Age.YOUNGADULT, Age.ADULT, Age.ELDER)]
+
+    for voter in voters:
+        if voter.id == current_dictator_id:
+            dictator_votes += 1
+            continue
+        if voter.id == celebrity_politician.id:
+            politician_votes += 1
+            continue
+
+        # Determine Eco Footprint preference (Mocked for prototype unless Eco is guaranteed)
+        # We assign a random eco-footprint to the voter: -1 (Industrial), 0 (Neutral), 1 (Green)
+        # In a full mod, you'd check `voter.statistic_tracker.get_statistic(231429)`.
+
+        eco_footprint_score = 0
+        if voter.statistic_tracker is not None:
+            eco_stat = stat_manager.get(231429) # commodity_EcoFootprint_Sim
+            if eco_stat is not None:
+                stat_inst = voter.statistic_tracker.get_statistic(eco_stat)
+                if stat_inst is not None:
+                    # Usually ranges from -500 to 500
+                    val = stat_inst.get_value()
+                    if val < -100: eco_footprint_score = -1 # Industrial
+                    elif val > 100: eco_footprint_score = 1 # Green
+
+        # If no Eco Lifestyle installed, randomize it
+        if eco_footprint_score == 0 and random.random() < 0.4:
+            eco_footprint_score = random.choice([-1, 1])
+
+        # Base voting chance
+        vote_dictator_chance = 0.50
+
+        # Reputation impact
+        if dictator_reputation > 30: vote_dictator_chance += 0.15
+        elif dictator_reputation < -30: vote_dictator_chance -= 0.15
+
+        # Eco Footprint Impact
+        if eco_footprint_score == -1: # Industrial / Bad Eco Footprint
+            # Bad eco footprint highly favors dictatorship
+            vote_dictator_chance += 0.35
+        elif eco_footprint_score == 1: # Green / Good Eco Footprint
+            # Good eco footprint highly favors normal celebrity politician
+            vote_dictator_chance -= 0.35
+
+        # Ensure it's between 5% and 95%
+        vote_dictator_chance = max(0.05, min(0.95, vote_dictator_chance))
+
+        if random.random() < vote_dictator_chance:
+            dictator_votes += 1
+        else:
+            politician_votes += 1
+
+    # 4. Results
+    output(f"RESULTS: {dictator_votes} votes for {dictator_info.full_name}, {politician_votes} votes for {celebrity_politician.full_name}.")
+
+    if dictator_votes >= politician_votes:
+        output(f"VICTORY! The Dictatorship remains in power. (Reputation +20)")
+        dictator_reputation += 20
+    else:
+        output(f"DEFEAT! The Celebrity Politician {celebrity_politician.full_name} won the popular vote! The Dictator was overthrown.")
+        # If they lose, they are overthrown
+        current_dictator_id = None
+
+    return True
 
 @sims4.commands.Command('dictator.illegal_vote', command_type=sims4.commands.CommandType.Live)
 def illegal_vote(opt_target: OptionalTargetParam = None, _connection=None):
