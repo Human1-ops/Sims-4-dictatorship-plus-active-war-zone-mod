@@ -340,34 +340,117 @@ def _war_ticker_callback(_):
         if current_region is not None and current_region.guid64 in active_war_zones:
             _trigger_active_war_skirmish()
 
-# Custom Situation Tuning ID from our prototype XML (1000000001)
-SKIRMISH_SITUATION_ID = 1000000001
-
 def _trigger_active_war_skirmish():
-    """A skirmish happens on the active lot because it's in a war zone."""
+    """A skirmish happens on the active lot because it's in a war zone.
+       Pure script implementation (no custom XML Situations)."""
     global current_dictator_id, military_allegiances, active_war_zones
     sims4.commands.output("WARNING: The active neighborhood is a WAR ZONE! A skirmish has erupted!", sims4.commands.CheatOutput(_connection=None))
 
-    # 1. Spawn Military Sims via Custom Situation
-    # This queries the Situation Manager and attempts to create our custom XML situation.
+    # 1. Manually find and spawn Military Sims via Script
     try:
-        situation_manager = services.get_zone_situation_manager()
-        skirmish_situation_tuning = services.get_instance_manager(sims4.resources.Types.SITUATION).get(SKIRMISH_SITUATION_ID)
+        from sims.sim_spawner import SimSpawner
+        import sims4.resources
+        import interactions.context
+        import interactions.priority
 
-        if skirmish_situation_tuning is not None:
-            # We pass empty guest list to let the SituationJob filter pull Sims from the world.
-            from situations.situation_guest_list import SituationGuestList
-            guest_list = SituationGuestList()
-            situation_manager.create_situation(
-                skirmish_situation_tuning,
-                guest_list=guest_list,
-                user_facing=False
-            )
-            sims4.commands.output("Military forces are arriving on the lot to engage in combat!", sims4.commands.CheatOutput(_connection=None))
+        sim_info_manager = services.sim_info_manager()
+        military_sim_infos = []
+
+        # Find off-lot military Sims
+        for sim_info in sim_info_manager.values():
+            if sim_info.id == current_dictator_id:
+                continue
+
+            # Must not already be on the lot
+            if sim_info.get_sim_instance() is not None:
+                continue
+
+            # Must be in StrangerVille military career
+            if sim_info.career_tracker is not None:
+                for career_uid, career in sim_info.career_tracker.careers.items():
+                    if career_uid == MILITARY_CAREER_TRACK_ID:
+                        military_sim_infos.append(sim_info)
+                        break
+
+        # Spawn up to 4 fighters
+        fighters_to_spawn = min(len(military_sim_infos), random.randint(2, 4))
+        spawned_fighters = []
+
+        if fighters_to_spawn > 0:
+            sims4.commands.output(f"{fighters_to_spawn} Military forces are arriving on the lot to engage in combat!", sims4.commands.CheatOutput(_connection=None))
+            for i in range(fighters_to_spawn):
+                sim_info_to_spawn = random.choice(military_sim_infos)
+                military_sim_infos.remove(sim_info_to_spawn)
+
+                # Assign a random allegiance if they don't have one
+                if sim_info_to_spawn.id not in military_allegiances:
+                    allegiance = random.choice(["dictatorship", "independence"])
+                    military_allegiances[sim_info_to_spawn.id] = allegiance
+
+                allegiance = military_allegiances[sim_info_to_spawn.id]
+                role_name = "Loyalist" if allegiance == "dictatorship" else "Rebel"
+                sims4.commands.output(f"A {role_name} soldier ({sim_info_to_spawn.full_name}) has joined the skirmish!", sims4.commands.CheatOutput(_connection=None))
+
+                # Spawn them near the edge of the lot
+                SimSpawner.spawn_sim(sim_info_to_spawn, sim_position=None)
+
+                # We need to wait slightly for them to instantiate, or grab them if they just did.
+                # In a robust script mod, you'd use a callback or wait for instantiation.
+                # Here, we'll try to get the instance immediately (which may be None if it takes a frame).
+                spawned_fighters.append(sim_info_to_spawn)
+
+            # Attempt to push fights.
+            # We use an alarm to delay the fight push slightly so the Sims have time to instantiate.
+            def push_combat_interactions(_):
+                interaction_manager = services.get_instance_manager(sims4.resources.Types.INTERACTION)
+                fight_interaction = interaction_manager.get(FIGHT_INTERACTION_ID)
+
+                if fight_interaction is None:
+                    return
+
+                valid_targets = [sim for sim in services.object_manager().get_valid_objects_gen() if sim.is_sim and sim.id != current_dictator_id]
+                if not valid_targets:
+                    return
+
+                for fighter_info in spawned_fighters:
+                    fighter_sim = fighter_info.get_sim_instance()
+                    if fighter_sim is not None:
+                        fighter_allegiance = military_allegiances.get(fighter_info.id)
+
+                        # Find a random victim on the lot, preferably from the opposing side
+                        # If no opposing side is found, just attack a random civilian
+                        opposing_targets = [sim for sim in valid_targets if sim.id != fighter_sim.id and
+                                            military_allegiances.get(sim.id) is not None and
+                                            military_allegiances.get(sim.id) != fighter_allegiance]
+
+                        if opposing_targets:
+                            victim = random.choice(opposing_targets)
+                        else:
+                            # Attack random civilian if no enemy soldiers
+                            victim = random.choice([sim for sim in valid_targets if sim.id != fighter_sim.id])
+
+                        if victim.id != fighter_sim.id:
+                            context = interactions.context.InteractionContext(
+                                fighter_sim,
+                                interactions.context.InteractionContext.SOURCE_SCRIPT,
+                                interactions.priority.Priority.High
+                            )
+                            fighter_sim.push_super_affordance(
+                                fight_interaction,
+                                victim,
+                                context
+                            )
+                            sims4.commands.output(f"*** {fighter_sim.full_name} is engaging {victim.full_name} in combat! ***", sims4.commands.CheatOutput(_connection=None))
+
+            # 10 second delay
+            time_span = date_and_time.create_time_span(minutes=10) # 10 Sim minutes
+            alarms.add_alarm(services.current_zone(), time_span, push_combat_interactions)
+
         else:
-            sims4.commands.output("Error: Could not find Skirmish Situation Tuning ID 1000000001.", sims4.commands.CheatOutput(_connection=None))
+             sims4.commands.output("No off-lot Military Sims found to spawn for the skirmish.", sims4.commands.CheatOutput(_connection=None))
+
     except Exception as e:
-        sims4.commands.output(f"Error starting skirmish situation: {e}", sims4.commands.CheatOutput(_connection=None))
+        sims4.commands.output(f"Error running pure script skirmish: {e}", sims4.commands.CheatOutput(_connection=None))
 
     # 2. Assess allegiances of military Sims already on the lot
     dictatorship_forces = 0
