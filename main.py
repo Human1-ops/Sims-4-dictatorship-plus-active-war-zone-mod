@@ -627,9 +627,19 @@ def _hook_zone_spin_up(original_function, self, *args, **kwargs):
 
     return result
 
+# A base game Confident/Happy buff related to fireworks/celebration.
+# E.g., The generic "Confident" buff or a festival/holiday buff that feels like a victory.
+# ID 25206 is the base game "Confident" buff. ID 156158 is New Year's Fireworks (Happy).
+# Let's use 156158 (Happy from Fireworks) to simulate the celebration, or just a strong Confident buff.
+# We will use the generic Confident buff (12829) for the prototype to represent surviving,
+# but output the text to signify the medal/fireworks.
+# Note: Adding truly custom text/icons to buffs *requires* XML tuning. Here we use an existing buff.
+SURVIVED_WAR_BUFF_ID = 156158  # Base game Happy buff related to Fireworks/Celebration
+
 def _return_from_war(sim_id):
     """Callback function when a drafted Sim returns from war."""
     global drafted_sims
+    import sims4.resources
     sim_info_manager = services.sim_info_manager()
     sim_info = sim_info_manager.get(sim_id)
 
@@ -639,8 +649,15 @@ def _return_from_war(sim_id):
     if sim_info is not None:
         # Randomly decide if they survived. For a prototype, let's say 80% survival rate.
         if random.random() < 0.8:
-            sims4.commands.output(f"{sim_info.full_name} has survived the war and returned home!", sims4.commands.CheatOutput(_connection=None))
-            # In a full mod, apply a PTSD/Tense or Confident buff here.
+            sims4.commands.output(f"HEROIC RETURN: {sim_info.full_name} has survived the war and returned home! They have been awarded the Medal of Valor for their efforts.", sims4.commands.CheatOutput(_connection=None))
+
+            # Apply the positive moodlet
+            buff_manager = services.get_instance_manager(sims4.resources.Types.BUFF)
+            survived_buff = buff_manager.get(SURVIVED_WAR_BUFF_ID)
+
+            if survived_buff is not None:
+                sim_info.add_buff_from_op(survived_buff.buff_type)
+                sims4.commands.output(f"*** {sim_info.full_name} received a positive moodlet for surviving! ***", sims4.commands.CheatOutput(_connection=None))
         else:
             sims4.commands.output(f"Tragic news... {sim_info.full_name} was killed in action during the war.", sims4.commands.CheatOutput(_connection=None))
             # In a full mod, trigger actual death sequence. For prototype, we just leave them despawned/destroyed.
