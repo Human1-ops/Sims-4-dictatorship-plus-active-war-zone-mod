@@ -15,6 +15,7 @@ jailed_sims = {}  # {sim_id: alarm_handle}
 active_training_deployment = None # {sim_id}
 _traveling_to_force_war = False
 teen_households_granted = set() # {household_id}
+dictator_reputation = 0 # Ranges from positive (beloved) to negative (hated)
 
 # Core Skill IDs for max check
 # Note: These are base game example IDs.
@@ -69,6 +70,37 @@ war_ticker_alarm = None
 FIGHT_INTERACTION_ID = 14243  # Example ID, might need tuning for a real mod.
 MILITARY_CAREER_TRACK_ID = 202483  # StrangerVille military career
 
+def _get_reputation_title():
+    global dictator_reputation
+    if dictator_reputation >= 50:
+        return "Beloved Leader"
+    elif dictator_reputation >= 20:
+        return "Respected Authority"
+    elif dictator_reputation >= -20:
+        return "Controversial Figure"
+    elif dictator_reputation >= -50:
+        return "Feared Tyrant"
+    else:
+        return "Despised Despot"
+
+@sims4.commands.Command('dictator.check_reputation', command_type=sims4.commands.CommandType.Live)
+def check_reputation(_connection=None):
+    output = sims4.commands.CheatOutput(_connection)
+    global current_dictator_id, dictator_reputation
+
+    if current_dictator_id is None:
+        output("There is no Dictator currently in power to check reputation.")
+        return False
+
+    dictator_info = services.sim_info_manager().get(current_dictator_id)
+    if dictator_info is None:
+        output("Dictator not found in the world.")
+        return False
+
+    title = _get_reputation_title()
+    output(f"{dictator_info.full_name}'s Current Reputation: {dictator_reputation} ({title})")
+    return True
+
 @sims4.commands.Command('dictator.make_dictator', command_type=sims4.commands.CommandType.Live)
 def make_dictator(opt_target: OptionalTargetParam = None, _connection=None):
     output = sims4.commands.CheatOutput(_connection)
@@ -78,9 +110,10 @@ def make_dictator(opt_target: OptionalTargetParam = None, _connection=None):
         output("No target found.")
         return False
 
-    global current_dictator_id
+    global current_dictator_id, dictator_reputation
     current_dictator_id = target.id
-    output(f"{target.full_name} is now the Dictator!")
+    dictator_reputation = 0 # Reset reputation for the new dictator
+    output(f"{target.full_name} is now the Dictator! Their reign begins with a neutral reputation.")
     return True
 
 @sims4.commands.Command('dictator.die', command_type=sims4.commands.CommandType.Live)
@@ -137,7 +170,7 @@ def dictator_die(_connection=None):
 @sims4.commands.Command('dictator.set_rule', command_type=sims4.commands.CommandType.Live)
 def set_rule(rule_name: str, _connection=None):
     output = sims4.commands.CheatOutput(_connection)
-    global current_dictator_id, active_rules
+    global current_dictator_id, active_rules, dictator_reputation
 
     if current_dictator_id is None:
         output("There is no Dictator to set rules.")
@@ -148,13 +181,14 @@ def set_rule(rule_name: str, _connection=None):
         return False
 
     active_rules.add(rule_name.lower())
-    output(f"The Dictator has decreed a new rule: {rule_name.upper()}!")
+    dictator_reputation -= 5
+    output(f"The Dictator has decreed a new rule: {rule_name.upper()}! (Reputation -5)")
     return True
 
 @sims4.commands.Command('dictator.remove_rule', command_type=sims4.commands.CommandType.Live)
 def remove_rule(rule_name: str, _connection=None):
     output = sims4.commands.CheatOutput(_connection)
-    global current_dictator_id, active_rules
+    global current_dictator_id, active_rules, dictator_reputation
 
     if current_dictator_id is None:
         output("There is no Dictator to remove rules.")
@@ -163,7 +197,8 @@ def remove_rule(rule_name: str, _connection=None):
     rule_name = rule_name.lower()
     if rule_name in active_rules:
         active_rules.remove(rule_name)
-        output(f"The Dictator has revoked the rule: {rule_name.upper()}!")
+        dictator_reputation += 5
+        output(f"The Dictator has revoked the rule: {rule_name.upper()}! (Reputation +5)")
         return True
     else:
         output(f"Rule '{rule_name}' is not currently active.")
@@ -292,7 +327,7 @@ def arrest_sim(opt_target: OptionalTargetParam = None, _connection=None):
     output = sims4.commands.CheatOutput(_connection)
     target_sim = get_optional_target(opt_target, _connection)
 
-    global current_dictator_id, jailed_sims
+    global current_dictator_id, jailed_sims, dictator_reputation
 
     if current_dictator_id is None:
         output("There is no Dictator to issue an arrest warrant.")
@@ -306,7 +341,8 @@ def arrest_sim(opt_target: OptionalTargetParam = None, _connection=None):
         output("The Dictator cannot be arrested!")
         return False
 
-    output(f"By decree of the Dictator, {target_sim.full_name} has been arrested and sent to jail for 3 Sim days!")
+    dictator_reputation -= 15
+    output(f"By decree of the Dictator, {target_sim.full_name} has been arrested and sent to jail for 3 Sim days! (Reputation -15)")
 
     time_span = date_and_time.create_time_span(days=3)
     alarm_handle = alarms.add_alarm(target_sim.sim_info, time_span, lambda _: _release_from_jail(target_sim.id))
@@ -320,6 +356,7 @@ def arrest_sim(opt_target: OptionalTargetParam = None, _connection=None):
 def banish(opt_target: OptionalTargetParam = None, _connection=None):
     output = sims4.commands.CheatOutput(_connection)
     target = get_optional_target(opt_target, _connection)
+    global current_dictator_id, dictator_reputation
 
     if target is None:
         output("No target found.")
@@ -329,7 +366,8 @@ def banish(opt_target: OptionalTargetParam = None, _connection=None):
         output("You cannot banish the Dictator!")
         return False
 
-    output(f"{target.full_name} has been banished by the Dictator!")
+    dictator_reputation -= 20
+    output(f"{target.full_name} has been banished by the Dictator! (Reputation -20)")
     target.destroy()
     return True
 
@@ -337,7 +375,7 @@ def banish(opt_target: OptionalTargetParam = None, _connection=None):
 def demand_taxes(amount: int = 1000, _connection=None):
     output = sims4.commands.CheatOutput(_connection)
 
-    global current_dictator_id
+    global current_dictator_id, dictator_reputation
     if current_dictator_id is None:
         output("There is no Dictator to demand taxes.")
         return False
@@ -353,7 +391,8 @@ def demand_taxes(amount: int = 1000, _connection=None):
         return False
 
     household.funds.add(amount, 0, None)
-    output(f"The Dictator has demanded and received {amount} Simoleons in taxes!")
+    dictator_reputation -= 10
+    output(f"The Dictator has demanded and received {amount} Simoleons in taxes! The citizens grow restless. (Reputation -10)")
     return True
 
 @sims4.commands.Command('dictator.set_allegiance', command_type=sims4.commands.CommandType.Live)
@@ -397,8 +436,8 @@ def _release_from_jail(sim_id):
         sims4.commands.output(f"{sim_info.full_name} has served their jail sentence and is released.", sims4.commands.CheatOutput(_connection=None))
 
 def _war_ticker_callback(_):
-    """Fires periodically to start or end wars, and trigger skirmishes."""
-    global active_war_zones, current_dictator_id
+    """Fires periodically to start or end wars, trigger skirmishes, and handle random scandals."""
+    global active_war_zones, current_dictator_id, dictator_reputation
 
     if current_dictator_id is None:
         # If the dictator dies/falls, wars slowly end.
@@ -406,6 +445,10 @@ def _war_ticker_callback(_):
             ended_region_id = active_war_zones.pop()
             sims4.commands.output(f"With the regime gone, peace returns to a former war zone.", sims4.commands.CheatOutput(_connection=None))
         return
+
+    # 5% chance of a random political scandal occurring every tick
+    if random.random() < 0.05:
+        _trigger_scandal_internal()
 
     regions = _get_all_regions()
     if not regions:
@@ -720,7 +763,10 @@ def _hook_zone_spin_up(original_function, self, *args, **kwargs):
                 if all_teens and sim_count > 0:
                     active_hh.funds.add(5000, 0, None)
                     teen_households_granted.add(active_hh.id)
-                    sims4.commands.output("DICTATORSHIP GRANT: This teen-only household has received 5,000 Simoleons to encourage independent living!", sims4.commands.CheatOutput(_connection=None))
+
+                    global dictator_reputation
+                    dictator_reputation += 10
+                    sims4.commands.output("DICTATORSHIP GRANT: This teen-only household has received 5,000 Simoleons to encourage independent living! The public appreciates this support. (Reputation +10)", sims4.commands.CheatOutput(_connection=None))
                 elif not all_teens:
                     # If it's a normal household, just mark it so we don't keep checking it every load screen
                     teen_households_granted.add(active_hh.id)
@@ -817,11 +863,42 @@ def _return_from_war(sim_id):
             if sim_instance is not None:
                 sim_instance.destroy()
 
+def _trigger_scandal_internal(_connection=None):
+    global current_dictator_id, dictator_reputation
+    if current_dictator_id is None:
+        return False
+
+    scandals = [
+        "Embezzlement from the state treasury!",
+        "Secret dealings with rebel forces uncovered!",
+        "Inappropriate behavior caught on tape!",
+        "Rigged neighborhood voting scandal!",
+        "Stolen military supplies sold on the black market!"
+    ]
+    scandal_desc = random.choice(scandals)
+
+    dictator_reputation -= 40
+    sims4.commands.output(f"SCANDAL! The Dictator's reputation has plummeted following a shocking revelation: {scandal_desc} (Reputation -40)", sims4.commands.CheatOutput(_connection=_connection))
+    return True
+
+@sims4.commands.Command('dictator.trigger_scandal', command_type=sims4.commands.CommandType.Live)
+def trigger_scandal(_connection=None):
+    """Manually forces a random political scandal to occur, severely damaging reputation."""
+    output = sims4.commands.CheatOutput(_connection)
+    global current_dictator_id
+
+    if current_dictator_id is None:
+        output("There is no Dictator currently in power to have a scandal.")
+        return False
+
+    _trigger_scandal_internal(_connection)
+    return True
+
 @sims4.commands.Command('dictator.declare_war', command_type=sims4.commands.CommandType.Live)
 def declare_war(_connection=None):
     """The Dictator manually declares war on a random world."""
     output = sims4.commands.CheatOutput(_connection)
-    global current_dictator_id, active_war_zones
+    global current_dictator_id, active_war_zones, dictator_reputation
 
     if current_dictator_id is None:
         output("There is no Dictator to declare war.")
@@ -841,7 +918,8 @@ def declare_war(_connection=None):
 
     target_region = random.choice(available_regions)
     active_war_zones.add(target_region.guid64)
-    output(f"The Dictator has declared WAR on {target_region.__name__}!")
+    dictator_reputation -= 30
+    output(f"The Dictator has declared WAR on {target_region.__name__}! (Reputation -30)")
 
     # If the active zone is now a war zone, trigger an immediate skirmish
     current_zone = services.current_zone()
@@ -973,7 +1051,7 @@ def draft_sim(opt_target: OptionalTargetParam = None, _connection=None):
     output = sims4.commands.CheatOutput(_connection)
     target_sim = get_optional_target(opt_target, _connection)
 
-    global current_dictator_id, drafted_sims, active_war_zones
+    global current_dictator_id, drafted_sims, active_war_zones, dictator_reputation
 
     if current_dictator_id is None:
         output("There is no Dictator in power to declare war or draft Sims.")
@@ -1014,7 +1092,8 @@ def draft_sim(opt_target: OptionalTargetParam = None, _connection=None):
     if is_eligible:
         # Draft them for a random amount of time between 2 and 5 days
         draft_duration_days = random.randint(2, 5)
-        output(f"By decree of the Dictator, {target_sim.full_name} has been drafted and sent to the warzone for {draft_duration_days} Sim days!")
+        dictator_reputation -= 10
+        output(f"By decree of the Dictator, {target_sim.full_name} has been drafted and sent to the warzone for {draft_duration_days} Sim days! (Reputation -10)")
 
         time_span = date_and_time.create_time_span(days=draft_duration_days)
         alarm_handle = alarms.add_alarm(sim_info, time_span, lambda _: _return_from_war(sim_info.id))
