@@ -1,0 +1,31 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  Situation Job: dictatorship_FighterJob
+  Tuning ID: 1000000002
+  Filters the world for eligible Sims (e.g., those in the Military career) to fill the job.
+-->
+<I c="SituationJob" i="situation_job" m="situations.situation_job" n="dictatorship_FighterJob" s="1000000002">
+  <T n="can_be_filled_by_camped_sims">True</T>
+
+  <!-- Filter to ensure we only pull Sims in the StrangerVille Military Career (ID 202483) -->
+  <L n="filter_requirements">
+    <V t="career">
+      <U n="career">
+        <V n="career_requirement" t="require_career">
+          <U n="require_career">
+            <T n="career">202483</T>
+          </U>
+        </V>
+      </U>
+    </V>
+  </L>
+
+  <!-- When they spawn, they wear their career outfit -->
+  <V n="job_uniform" t="uniform_specified">
+    <U n="uniform_specified">
+      <T n="outfit_category">CAREER</T>
+    </U>
+  </V>
+
+  <T n="user_facing">False</T>
+</I>

@@ -1,0 +1,20 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  Buff: dictatorship_Buff_FighterAggression
+  Tuning ID: 1000000004
+  An invisible buff that runs an interaction mixer to constantly push fighting.
+-->
+<I c="Buff" i="buff" m="buffs.buff" n="dictatorship_Buff_FighterAggression" s="1000000004">
+  <V n="audio_sting_on_add" t="disabled" />
+  <V n="audio_sting_on_remove" t="disabled" />
+  <T n="visible">False</T>
+
+  <L n="actor_mixers">
+    <U>
+      <!-- Base game generic fight Interaction ID: 14243 -->
+      <T n="affordance">14243</T>
+      <!-- High weight so they prioritize this over normal behavior -->
+      <T n="weight">100</T>
+    </U>
+  </L>
+</I>

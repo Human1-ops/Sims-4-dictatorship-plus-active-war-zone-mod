@@ -340,12 +340,36 @@ def _war_ticker_callback(_):
         if current_region is not None and current_region.guid64 in active_war_zones:
             _trigger_active_war_skirmish()
 
+# Custom Situation Tuning ID from our prototype XML (1000000001)
+SKIRMISH_SITUATION_ID = 1000000001
+
 def _trigger_active_war_skirmish():
     """A skirmish happens on the active lot because it's in a war zone."""
     global current_dictator_id, military_allegiances, active_war_zones
     sims4.commands.output("WARNING: The active neighborhood is a WAR ZONE! A skirmish has erupted!", sims4.commands.CheatOutput(_connection=None))
 
-    # Assess allegiances of military Sims on the lot
+    # 1. Spawn Military Sims via Custom Situation
+    # This queries the Situation Manager and attempts to create our custom XML situation.
+    try:
+        situation_manager = services.get_zone_situation_manager()
+        skirmish_situation_tuning = services.get_instance_manager(sims4.resources.Types.SITUATION).get(SKIRMISH_SITUATION_ID)
+
+        if skirmish_situation_tuning is not None:
+            # We pass empty guest list to let the SituationJob filter pull Sims from the world.
+            from situations.situation_guest_list import SituationGuestList
+            guest_list = SituationGuestList()
+            situation_manager.create_situation(
+                skirmish_situation_tuning,
+                guest_list=guest_list,
+                user_facing=False
+            )
+            sims4.commands.output("Military forces are arriving on the lot to engage in combat!", sims4.commands.CheatOutput(_connection=None))
+        else:
+            sims4.commands.output("Error: Could not find Skirmish Situation Tuning ID 1000000001.", sims4.commands.CheatOutput(_connection=None))
+    except Exception as e:
+        sims4.commands.output(f"Error starting skirmish situation: {e}", sims4.commands.CheatOutput(_connection=None))
+
+    # 2. Assess allegiances of military Sims already on the lot
     dictatorship_forces = 0
     independence_forces = 0
 
