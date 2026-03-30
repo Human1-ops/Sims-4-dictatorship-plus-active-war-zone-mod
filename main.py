@@ -12,6 +12,50 @@ from world.region import Region
 current_dictator_id = None
 active_rules = set()
 jailed_sims = {}  # {sim_id: alarm_handle}
+
+# Core Skill IDs for max check
+# Note: These are base game example IDs.
+# Infant: Fine Motor (280058), Gross Motor (280061), Crawling/Walking etc.
+# Toddler: Communication (140170), Imagination (140706), Movement (136140), Potty (144913), Thinking (140504)
+# Child: Creativity (16718), Mental (16719), Motor (16720), Social (16721)
+
+SKILLS_INFANT = [280058, 280061] # Usually max at level 3
+SKILLS_TODDLER = [140170, 140706, 136140, 144913, 140504] # Most max at 5, potty at 3
+SKILLS_CHILD = [16718, 16719, 16720, 16721] # Max at 10
+
+def _has_maxed_skills(sim_info):
+    """Checks if a Sim has maxed their age-specific foundational skills."""
+    import sims4.resources
+    skill_manager = services.get_instance_manager(sims4.resources.Types.STATISTIC)
+
+    if sim_info.age == Age.INFANT:
+        required_skills = SKILLS_INFANT
+    elif sim_info.age == Age.TODDLER:
+        required_skills = SKILLS_TODDLER
+    elif sim_info.age == Age.CHILD:
+        required_skills = SKILLS_CHILD
+    else:
+        return False # This function is only for young ages
+
+    stat_tracker = sim_info.statistic_tracker
+    if stat_tracker is None:
+        return False
+
+    for skill_id in required_skills:
+        skill_tuning = skill_manager.get(skill_id)
+        if skill_tuning is None:
+            continue
+
+        stat_inst = stat_tracker.get_statistic(skill_tuning)
+        # If they don't even have the skill started, they haven't maxed it
+        if stat_inst is None:
+            return False
+
+        # Check if their current level is equal to or greater than the max possible level for that skill
+        if stat_inst.get_user_value() < skill_tuning.max_level:
+            return False
+
+    return True
 drafted_sims = {} # {sim_id: alarm_handle}
 active_war_zones = set() # {region_id}
 military_allegiances = {} # {sim_id: "dictatorship" or "independence"}
@@ -354,33 +398,71 @@ def _trigger_active_war_skirmish():
         import interactions.priority
 
         sim_info_manager = services.sim_info_manager()
-        military_sim_infos = []
 
-        # Find off-lot military Sims
+        # Group military Sims by age to give each age group an equal spawn chance
+        military_sims_by_age = {
+            Age.TODDLER: [],
+            Age.CHILD: [],
+            Age.TEEN: [],
+            Age.YOUNGADULT: [],
+            Age.ADULT: []
+        }
+
+        total_military_sims = 0
+
+        # Find off-lot military Sims (and drafted Sims)
         for sim_info in sim_info_manager.values():
             if sim_info.id == current_dictator_id:
+                continue
+
+            # We are currently only explicitly allowing Toddlers through Adults to spawn
+            # with equal chance as requested. Infants can be drafted, but they can't fight/spawn in skirmishes safely.
+            if sim_info.age not in military_sims_by_age:
                 continue
 
             # Must not already be on the lot
             if sim_info.get_sim_instance() is not None:
                 continue
 
-            # Must be in StrangerVille military career
-            if sim_info.career_tracker is not None:
+            is_military = False
+
+            # Check if they are drafted.
+            if sim_info.id in drafted_sims:
+                is_military = True
+
+            # Or if they are in the StrangerVille military career
+            # (Usually applies to Teens, Young Adults, Adults)
+            if not is_military and sim_info.age in (Age.TEEN, Age.YOUNGADULT, Age.ADULT) and sim_info.career_tracker is not None:
                 for career_uid, career in sim_info.career_tracker.careers.items():
                     if career_uid == MILITARY_CAREER_TRACK_ID:
-                        military_sim_infos.append(sim_info)
+                        is_military = True
                         break
 
+            if is_military:
+                military_sims_by_age[sim_info.age].append(sim_info)
+                total_military_sims += 1
+
         # Spawn up to 4 fighters
-        fighters_to_spawn = min(len(military_sim_infos), random.randint(2, 4))
+        fighters_to_spawn = min(total_military_sims, random.randint(2, 4))
         spawned_fighters = []
 
         if fighters_to_spawn > 0:
             sims4.commands.output(f"{fighters_to_spawn} Military forces are arriving on the lot to engage in combat!", sims4.commands.CheatOutput(_connection=None))
             for i in range(fighters_to_spawn):
-                sim_info_to_spawn = random.choice(military_sim_infos)
-                military_sim_infos.remove(sim_info_to_spawn)
+                # Filter out age groups that are empty
+                available_ages = [age for age, sims in military_sims_by_age.items() if len(sims) > 0]
+
+                if not available_ages:
+                    break
+
+                # Pick a random age group first (this gives equal chance to toddlers vs adults)
+                chosen_age = random.choice(available_ages)
+
+                # Pick a random Sim from that age group
+                sim_info_to_spawn = random.choice(military_sims_by_age[chosen_age])
+
+                # Remove them so they don't get picked twice
+                military_sims_by_age[chosen_age].remove(sim_info_to_spawn)
 
                 # Assign a random allegiance if they don't have one
                 if sim_info_to_spawn.id not in military_allegiances:
@@ -625,8 +707,25 @@ def draft_sim(opt_target: OptionalTargetParam = None, _connection=None):
 
     sim_info = target_sim.sim_info
 
-    # Check age to see if they are eligible for the draft
-    if sim_info.age in (Age.TEEN, Age.YOUNGADULT, Age.ADULT, Age.ELDER):
+    # Check age and skill conditions for drafting
+    is_eligible = False
+
+    if sim_info.age in (Age.TEEN, Age.YOUNGADULT, Age.ADULT, Age.CHILD, Age.TODDLER):
+        # Always eligible
+        is_eligible = True
+    elif sim_info.age == Age.INFANT:
+        # Eligible only if they have maxed their foundational skills
+        if _has_maxed_skills(sim_info):
+            is_eligible = True
+            output(f"{target_sim.full_name} is an infant, but their exceptional skills qualify them for the draft!")
+        else:
+            output(f"{target_sim.full_name} is an infant and lacks the required maxed skills to be drafted.")
+            return False
+    else:
+        output(f"{target_sim.full_name} is not an eligible age for the military draft.")
+        return False
+
+    if is_eligible:
         # Draft them for a random amount of time between 2 and 5 days
         draft_duration_days = random.randint(2, 5)
         output(f"By decree of the Dictator, {target_sim.full_name} has been drafted and sent to the warzone for {draft_duration_days} Sim days!")
@@ -638,9 +737,6 @@ def draft_sim(opt_target: OptionalTargetParam = None, _connection=None):
         # Despawn the Sim to simulate them leaving for war
         target_sim.destroy()
         return True
-    else:
-        output(f"{target_sim.full_name} is too young to be drafted into the military.")
-        return False
 
 # --- Interaction Hooks for Voting Board ---
 # To make this a full mod instead of just a prototype command, you would inject into the
