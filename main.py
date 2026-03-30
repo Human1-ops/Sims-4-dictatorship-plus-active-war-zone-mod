@@ -12,6 +12,7 @@ from world.region import Region
 current_dictator_id = None
 active_rules = set()
 jailed_sims = {}  # {sim_id: alarm_handle}
+active_training_deployment = None # {sim_id}
 
 # Core Skill IDs for max check
 # Note: These are base game example IDs.
@@ -619,13 +620,76 @@ def inject_method(target_class, target_function_name):
 def _hook_zone_spin_up(original_function, self, *args, **kwargs):
     result = original_function(self, *args, **kwargs)
 
-    global war_ticker_alarm
+    global war_ticker_alarm, active_training_deployment
     # If the timer isn't running, start it. Ticks every 6 Sim hours.
     if war_ticker_alarm is None:
         time_span = date_and_time.create_time_span(hours=6)
         war_ticker_alarm = alarms.add_alarm(self, time_span, _war_ticker_callback, repeating=True)
 
+    # Check if we just traveled for a training deployment
+    if active_training_deployment is not None:
+        sim_id = active_training_deployment
+        active_training_deployment = None # Clear it so it only runs once per travel
+
+        sim_info = services.sim_info_manager().get(sim_id)
+        if sim_info is not None:
+            # Delay the training actions slightly to let the world fully load
+            time_span = date_and_time.create_time_span(minutes=5)
+            alarms.add_alarm(self, time_span, lambda _: _start_training_regimen(sim_info.id))
+
     return result
+
+def _start_training_regimen(sim_id):
+    """Pushes a sequence of interactions: Pushups, Run, Chat."""
+    import sims4.resources
+    from interactions.context import InteractionContext
+    import interactions.priority
+
+    sim_info = services.sim_info_manager().get(sim_id)
+    if sim_info is None:
+        return
+
+    sim_instance = sim_info.get_sim_instance()
+    if sim_instance is None:
+        return
+
+    interaction_manager = services.get_instance_manager(sims4.resources.Types.INTERACTION)
+
+    # Base game IDs (These might need exact tuning ID adjustments for a real, polished mod)
+    # 14238: generic_pushups
+    # 13444: go_for_jog
+    # 26053: sim_Chat
+    PUSHUPS_ID = 14238
+    JOG_ID = 13444
+    CHAT_ID = 26053
+
+    pushups_sa = interaction_manager.get(PUSHUPS_ID)
+    jog_sa = interaction_manager.get(JOG_ID)
+    chat_sa = interaction_manager.get(CHAT_ID)
+
+    context = InteractionContext(
+        sim_instance,
+        InteractionContext.SOURCE_SCRIPT,
+        interactions.priority.Priority.High
+    )
+
+    sims4.commands.output(f"MILITARY TRAINING: {sim_info.full_name} has arrived and is beginning their training regimen (Pushups, Jogging, Interrogating Locals).", sims4.commands.CheatOutput(_connection=None))
+
+    # Push Pushups
+    if pushups_sa is not None:
+        # Pushups are targeted on the sim themselves or the ground. Usually None is fine for self-interactions.
+        sim_instance.push_super_affordance(pushups_sa, None, context)
+
+    # Push Jog (queues after pushups)
+    if jog_sa is not None:
+        sim_instance.push_super_affordance(jog_sa, None, context)
+
+    # Find a random local to talk to
+    if chat_sa is not None:
+        valid_targets = [sim for sim in services.object_manager().get_valid_objects_gen() if sim.is_sim and sim.id != sim_id and sim.sim_info.age in (Age.TEEN, Age.YOUNGADULT, Age.ADULT, Age.ELDER)]
+        if valid_targets:
+            local_sim = random.choice(valid_targets)
+            sim_instance.push_super_affordance(chat_sa, local_sim, context)
 
 # A base game Confident/Happy buff related to fireworks/celebration.
 # E.g., The generic "Confident" buff or a festival/holiday buff that feels like a victory.
@@ -695,6 +759,52 @@ def declare_war(_connection=None):
     current_zone = services.current_zone()
     if current_zone is not None and current_zone.region is not None and current_zone.region.guid64 == target_region.guid64:
         _trigger_active_war_skirmish()
+
+    return True
+
+@sims4.commands.Command('dictator.deploy_training', command_type=sims4.commands.CommandType.Live)
+def deploy_training(opt_target: OptionalTargetParam = None, _connection=None):
+    """Forces the target military Sim (and the active household/camera) to travel to a random region for training."""
+    output = sims4.commands.CheatOutput(_connection)
+    target_sim = get_optional_target(opt_target, _connection)
+    global active_training_deployment
+
+    if target_sim is None:
+        output("No target found for training deployment.")
+        return False
+
+    # Pick a random lot in the world that isn't the current one to travel to
+    import build_buy
+    from server.client import Client
+
+    current_zone_id = services.current_zone_id()
+    all_zones = services.get_persistence_service().get_save_game_data_proto().zones
+
+    valid_destinations = [z.zone_id for z in all_zones if z.zone_id != current_zone_id]
+
+    if not valid_destinations:
+        output("Could not find another zone to travel to for training.")
+        return False
+
+    destination_zone_id = random.choice(valid_destinations)
+
+    output(f"Deploying {target_sim.full_name} to a foreign region for active training! Loading screen incoming...")
+
+    # Mark the deployment so that when the new zone loads, the training regimen starts
+    active_training_deployment = target_sim.id
+
+    # Force travel for the active household
+    client = services.client_manager().get_first_client()
+    if client is not None:
+        active_household = client.household
+        if active_household is not None:
+            # Send the household and the targeted sim (if they aren't in the household)
+            travel_sim_ids = list(active_household.sim_ids)
+            if target_sim.id not in travel_sim_ids:
+                travel_sim_ids.append(target_sim.id)
+
+            # Trigger the game's travel sequence
+            services.get_zone_situation_manager()._travel_to_zone(destination_zone_id, travel_sim_ids)
 
     return True
 
