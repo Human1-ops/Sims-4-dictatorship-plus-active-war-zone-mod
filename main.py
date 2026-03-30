@@ -259,6 +259,25 @@ def break_rule(rule_name: str, opt_target: OptionalTargetParam = None, _connecti
                 context
             )
             output(f"*** {enforcer_sim.full_name} initiated a fight with {target_sim.full_name}! ***")
+
+            # Since tracking actual interaction results (who won the fight) requires complex state listeners in Python,
+            # we will simulate the outcome here via a delayed alarm. If the enforcer wins (higher chance), the target is arrested.
+            def _resolve_fight_arrest(_):
+                # 70% chance the military enforcer wins and arrests them
+                if random.random() < 0.70:
+                    sims4.commands.output(f"{enforcer_sim.full_name} subdued {target_sim.full_name}! They are being sent to jail for 2 days for breaking the rule.", sims4.commands.CheatOutput(_connection=None))
+
+                    time_span = date_and_time.create_time_span(days=2)
+                    alarm_handle = alarms.add_alarm(target_sim.sim_info, time_span, lambda _: _release_from_jail(target_sim.id))
+                    jailed_sims[target_sim.id] = alarm_handle
+                    target_sim.destroy()
+                else:
+                    sims4.commands.output(f"{target_sim.full_name} managed to escape the Military after the fight! They remain free.", sims4.commands.CheatOutput(_connection=None))
+
+            # Set alarm for 30 sim minutes to let the fight happen before resolving the arrest
+            time_span = date_and_time.create_time_span(minutes=30)
+            alarms.add_alarm(services.current_zone(), time_span, _resolve_fight_arrest)
+
         else:
             output("Error: Could not load the fight interaction data.")
     except Exception as e:
@@ -266,6 +285,35 @@ def break_rule(rule_name: str, opt_target: OptionalTargetParam = None, _connecti
 
     return True
 
+@sims4.commands.Command('dictator.arrest', command_type=sims4.commands.CommandType.Live)
+def arrest_sim(opt_target: OptionalTargetParam = None, _connection=None):
+    """The Dictator instantly orders the arrest of a target Sim without a fight."""
+    output = sims4.commands.CheatOutput(_connection)
+    target_sim = get_optional_target(opt_target, _connection)
+
+    global current_dictator_id, jailed_sims
+
+    if current_dictator_id is None:
+        output("There is no Dictator to issue an arrest warrant.")
+        return False
+
+    if target_sim is None:
+        output("No target found to arrest.")
+        return False
+
+    if target_sim.id == current_dictator_id:
+        output("The Dictator cannot be arrested!")
+        return False
+
+    output(f"By decree of the Dictator, {target_sim.full_name} has been arrested and sent to jail for 3 Sim days!")
+
+    time_span = date_and_time.create_time_span(days=3)
+    alarm_handle = alarms.add_alarm(target_sim.sim_info, time_span, lambda _: _release_from_jail(target_sim.id))
+    jailed_sims[target_sim.id] = alarm_handle
+
+    # Send them to jail (despawn)
+    target_sim.destroy()
+    return True
 
 @sims4.commands.Command('dictator.banish', command_type=sims4.commands.CommandType.Live)
 def banish(opt_target: OptionalTargetParam = None, _connection=None):
@@ -951,11 +999,40 @@ def draft_sim(opt_target: OptionalTargetParam = None, _connection=None):
         return True
 
 # --- Interaction Hooks for Voting Board ---
-# To make this a full mod instead of just a prototype command, you would inject into the
-# specific interaction tuning for the NAP voting boards.
-# For example, injecting into `civic_policies_voting_board_interactions`.
-# When the interaction is tested or triggered, you check `current_dictator_id`.
-# If it's not None, you cancel the interaction and call the logic below.
+
+import interactions.base.super_interaction
+from event_testing.results import TestResult
+
+@inject_method(interactions.base.super_interaction.SuperInteraction, 'test')
+def _hook_super_interaction_test(original_function, self, *args, **kwargs):
+    result = original_function(self, *args, **kwargs)
+
+    # If the test passed naturally, we just return it.
+    if result:
+        return result
+
+    global current_dictator_id
+    if current_dictator_id is None:
+        return result
+
+    # kwargs usually has 'context' from which we can get the interacting sim
+    context = kwargs.get('context')
+    if context is None and args:
+        # Sometimes context is the first arg if it's not a kwarg
+        context = args[0]
+
+    if context is not None and getattr(context, 'sim', None) is not None:
+        sim = context.sim
+        if sim.id == current_dictator_id:
+            # We check if the interaction belongs to NAP voting boards/mailboxes.
+            # Interactions related to NAPs usually contain 'civic_policy' or 'voting' in their tuning name.
+            # In Sims 4, `self.__name__` or `type(self).__name__` gives the tuning name.
+            interaction_name = type(self).__name__.lower()
+            if 'civic_policy' in interaction_name or 'voting' in interaction_name or 'nap' in interaction_name:
+                # Override the test failure! The Dictator can do what they want, even if they are an infant.
+                return TestResult.TRUE
+
+    return result
 
 @sims4.commands.Command('dictator.illegal_vote', command_type=sims4.commands.CommandType.Live)
 def illegal_vote(opt_target: OptionalTargetParam = None, _connection=None):
