@@ -14,6 +14,7 @@ active_rules = set()
 jailed_sims = {}  # {sim_id: alarm_handle}
 active_training_deployment = None # {sim_id}
 _traveling_to_force_war = False
+teen_households_granted = set() # {household_id}
 
 # Core Skill IDs for max check
 # Note: These are base game example IDs.
@@ -698,6 +699,31 @@ def _hook_zone_spin_up(original_function, self, *args, **kwargs):
         # Delay the skirmish by 5 Sim minutes so the world finishes loading
         time_span = date_and_time.create_time_span(minutes=5)
         alarms.add_alarm(self, time_span, lambda _: _trigger_active_war_skirmish())
+
+    # Check for Teen-Only Households to give the Dictatorship grant
+    global teen_households_granted, current_dictator_id
+    if current_dictator_id is not None:
+        client = services.client_manager().get_first_client()
+        if client is not None and client.household is not None:
+            active_hh = client.household
+            if active_hh.id not in teen_households_granted:
+                # Check if EVERY sim in the household is a Teen
+                all_teens = True
+                sim_count = 0
+                for sim_info in active_hh.sim_info_gen():
+                    sim_count += 1
+                    if sim_info.age != Age.TEEN:
+                        all_teens = False
+                        break
+
+                # Only give the grant if it's genuinely a household composed entirely of Teens
+                if all_teens and sim_count > 0:
+                    active_hh.funds.add(5000, 0, None)
+                    teen_households_granted.add(active_hh.id)
+                    sims4.commands.output("DICTATORSHIP GRANT: This teen-only household has received 5,000 Simoleons to encourage independent living!", sims4.commands.CheatOutput(_connection=None))
+                elif not all_teens:
+                    # If it's a normal household, just mark it so we don't keep checking it every load screen
+                    teen_households_granted.add(active_hh.id)
 
     return result
 
