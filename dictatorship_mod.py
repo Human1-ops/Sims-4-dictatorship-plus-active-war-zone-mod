@@ -484,6 +484,65 @@ def _war_ticker_callback(_):
         if current_region is not None and current_region.guid64 in active_war_zones:
             _trigger_active_war_skirmish()
 
+    # Simulate deployments for wars in other worlds
+    _simulate_offscreen_wars(current_region_id)
+
+def _simulate_offscreen_wars(active_region_id):
+    """Pulls available military Sims to fight in wars happening in other worlds."""
+    global active_war_zones, current_dictator_id, drafted_sims
+    import sims4.commands
+
+    if current_dictator_id is None:
+        return
+
+    # Get all active wars that are NOT the current zone
+    offscreen_wars = [r_id for r_id in active_war_zones if r_id != active_region_id]
+    if not offscreen_wars:
+        return
+
+    sim_info_manager = services.sim_info_manager()
+    available_military = []
+
+    # Find all eligible military Sims who are NOT currently drafted/deployed and NOT on the active lot
+    for sim_info in sim_info_manager.values():
+        if sim_info.id == current_dictator_id:
+            continue
+
+        # If they are already drafted/deployed, skip
+        if sim_info.id in drafted_sims:
+            continue
+
+        # Must not be instantiated on the current lot
+        if sim_info.get_sim_instance() is not None:
+            continue
+
+        if sim_info.career_tracker is not None:
+            for career_uid, career in sim_info.career_tracker.careers.items():
+                if career_uid == MILITARY_CAREER_TRACK_ID:
+                    available_military.append(sim_info)
+                    break
+
+    if not available_military:
+        return
+
+    # For each off-screen war, there's a chance to deploy 1-2 Sims
+    for war_id in offscreen_wars:
+        # 50% chance to deploy someone to this war on this tick
+        if random.random() < 0.50 and available_military:
+            num_to_deploy = min(len(available_military), random.randint(1, 2))
+
+            for _ in range(num_to_deploy):
+                deploy_sim = random.choice(available_military)
+                available_military.remove(deploy_sim)
+
+                # Deploy them for 1 to 3 days
+                deploy_duration = random.randint(1, 3)
+                sims4.commands.output(f"DEPLOYMENT: {deploy_sim.full_name} has been deployed to a war in another region for {deploy_duration} days.", sims4.commands.CheatOutput(_connection=None))
+
+                time_span = date_and_time.create_time_span(days=deploy_duration)
+                alarm_handle = alarms.add_alarm(deploy_sim, time_span, lambda _, s_id=deploy_sim.id: _return_from_war(s_id))
+                drafted_sims[deploy_sim.id] = alarm_handle
+
 def _trigger_active_war_skirmish():
     """A skirmish happens on the active lot because it's in a war zone.
        Pure script implementation (no custom XML Situations)."""
@@ -1215,10 +1274,10 @@ if SUPER_INTERACTION_CLASS is not None:
                         stat_inst = voter.statistic_tracker.get_statistic(eco_stat)
                         if stat_inst is not None:
                             val = stat_inst.get_value()
-                        if val < -100:
-                            eco_footprint_score = -1
-                        elif val > 100:
-                            eco_footprint_score = 1
+                            if val < -100:
+                                eco_footprint_score = -1
+                            elif val > 100:
+                                eco_footprint_score = 1
 
                 if eco_footprint_score == 0 and random.random() < 0.4:
                     eco_footprint_score = random.choice([-1, 1])
