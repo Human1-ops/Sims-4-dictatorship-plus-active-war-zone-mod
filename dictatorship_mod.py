@@ -8,6 +8,13 @@ import date_and_time
 import zone
 from world.region import Region
 
+# --- Initialization Check ---
+@sims4.commands.Command('dictator.ping', command_type=sims4.commands.CommandType.Live)
+def _dictator_ping(_connection=None):
+    output = sims4.commands.CheatOutput(_connection)
+    output("Pong! The Dictatorship Mod has loaded successfully and is running.")
+    return True
+
 # --- Mod State ---
 current_dictator_id = None
 active_rules = set()
@@ -699,17 +706,20 @@ def _trigger_active_war_skirmish():
                 jailed_sims[victim.id] = alarm_handle
                 victim.destroy()
 
-def inject_method(target_class, target_function_name):
-    """A basic injection decorator for Sims 4 modding."""
-    def decorator(new_function):
-        original_function = getattr(target_class, target_function_name)
-        def wrapper(*args, **kwargs):
-            return new_function(original_function, *args, **kwargs)
-        setattr(target_class, target_function_name, wrapper)
-        return wrapper
-    return decorator
+def inject_to(target_object, target_function_name):
+    """A safer injection method that intercepts the original function and replaces it."""
+    def _inject_to(new_function):
+        original_function = getattr(target_object, target_function_name)
 
-@inject_method(zone.Zone, 'do_zone_spin_up')
+        def _wrapper(*args, **kwargs):
+            return new_function(original_function, *args, **kwargs)
+
+        setattr(target_object, target_function_name, _wrapper)
+        return _wrapper
+    return _inject_to
+
+# Safe hook: We inject into zone.Zone
+@inject_to(zone.Zone, 'do_zone_spin_up')
 def _hook_zone_spin_up(original_function, self, *args, **kwargs):
     result = original_function(self, *args, **kwargs)
 
@@ -746,30 +756,33 @@ def _hook_zone_spin_up(original_function, self, *args, **kwargs):
     # Check for Teen-Only Households to give the Dictatorship grant
     global teen_households_granted, current_dictator_id
     if current_dictator_id is not None:
-        client = services.client_manager().get_first_client()
-        if client is not None and client.household is not None:
-            active_hh = client.household
-            if active_hh.id not in teen_households_granted:
-                # Check if EVERY sim in the household is a Teen
-                all_teens = True
-                sim_count = 0
-                for sim_info in active_hh.sim_info_gen():
-                    sim_count += 1
-                    if sim_info.age != Age.TEEN:
-                        all_teens = False
-                        break
+        try:
+            client = services.client_manager().get_first_client()
+            if client is not None and client.household is not None:
+                active_hh = client.household
+                if active_hh.id not in teen_households_granted:
+                    # Check if EVERY sim in the household is a Teen
+                    all_teens = True
+                    sim_count = 0
+                    for sim_info in active_hh.sim_info_gen():
+                        sim_count += 1
+                        if sim_info.age != Age.TEEN:
+                            all_teens = False
+                            break
 
-                # Only give the grant if it's genuinely a household composed entirely of Teens
-                if all_teens and sim_count > 0:
-                    active_hh.funds.add(5000, 0, None)
-                    teen_households_granted.add(active_hh.id)
+                    # Only give the grant if it's genuinely a household composed entirely of Teens
+                    if all_teens and sim_count > 0:
+                        active_hh.funds.add(5000, 0, None)
+                        teen_households_granted.add(active_hh.id)
 
-                    global dictator_reputation
-                    dictator_reputation += 10
-                    sims4.commands.output("DICTATORSHIP GRANT: This teen-only household has received 5,000 Simoleons to encourage independent living! The public appreciates this support. (Reputation +10)", sims4.commands.CheatOutput(_connection=None))
-                elif not all_teens:
-                    # If it's a normal household, just mark it so we don't keep checking it every load screen
-                    teen_households_granted.add(active_hh.id)
+                        global dictator_reputation
+                        dictator_reputation += 10
+                        sims4.commands.output("DICTATORSHIP GRANT: This teen-only household has received 5,000 Simoleons to encourage independent living! The public appreciates this support. (Reputation +10)", sims4.commands.CheatOutput(_connection=None))
+                    elif not all_teens:
+                        # If it's a normal household, just mark it so we don't keep checking it every load screen
+                        teen_households_granted.add(active_hh.id)
+        except Exception as e:
+            sims4.commands.output(f"Error checking teen grant: {e}", sims4.commands.CheatOutput(_connection=None))
 
     return result
 
@@ -1105,182 +1118,192 @@ def draft_sim(opt_target: OptionalTargetParam = None, _connection=None):
 
 # --- Interaction Hooks for Voting Board ---
 
-import interactions.base.super_interaction
 from event_testing.results import TestResult
 import sims4.localization
+
+# Ensure the interactions module doesn't crash the script on load if it's not ready
+try:
+    import interactions.base.super_interaction
+    SUPER_INTERACTION_CLASS = interactions.base.super_interaction.SuperInteraction
+except ImportError:
+    SUPER_INTERACTION_CLASS = None
 
 # The localized string ID for "Vote on Neighborhood Action Plans" or just "Vote"
 # "Vote" is often 0x3D72B8B3 or similar. We will use a generic string ID.
 VOTE_STRING_ID = 0xD7C78E29 # "Vote" from City Living/Eco Lifestyle context
 
-class DictatorElectionInteraction(interactions.base.super_interaction.SuperInteraction):
-    @classmethod
-    def _test(cls, target, context, **kwargs):
-        # Only the Dictator can initiate this special election on the board
-        global current_dictator_id
-        if current_dictator_id is None or context.sim.id != current_dictator_id:
-            return TestResult(False, "Only the Dictator can hold the election.")
-        return TestResult.TRUE
+class DictatorElectionInteraction:
+    """Mock fallback class if SuperInteraction fails to import."""
+    pass
 
-    def get_name(self, target=None, context=None, **kwargs):
-        # Hack to return a localized string instead of blank text
-        return sims4.localization._create_localized_string(VOTE_STRING_ID)
+if SUPER_INTERACTION_CLASS is not None:
+    class DictatorElectionInteraction(SUPER_INTERACTION_CLASS):
+        @classmethod
+        def _test(cls, target, context, **kwargs):
+            global current_dictator_id
+            if current_dictator_id is None or context.sim.id != current_dictator_id:
+                return TestResult(False, "Only the Dictator can hold the election.")
+            return TestResult.TRUE
 
-    def _run_interaction_gen(self, timeline):
-        # We wrap the election logic in a generator because Interactions run as tasks
-        global current_dictator_id, dictator_reputation
+        def get_name(self, target=None, context=None, **kwargs):
+            return sims4.localization._create_localized_string(VOTE_STRING_ID)
 
-        sims4.commands.output("Election interaction started on the board!", sims4.commands.CheatOutput(_connection=None))
+        def _run_interaction_gen(self, timeline):
+            global current_dictator_id, dictator_reputation
+            sims4.commands.output("Election interaction started on the board!", sims4.commands.CheatOutput(_connection=None))
 
-        sim_info_manager = services.sim_info_manager()
-
-        dictator_info = sim_info_manager.get(current_dictator_id)
-        if dictator_info is None:
-            return False
-
-        # Find Celebrity Politician
-        FAME_STAT_ID = 188229
-        import sims4.resources
-        stat_manager = services.get_instance_manager(sims4.resources.Types.STATISTIC)
-        fame_tuning = stat_manager.get(FAME_STAT_ID)
-
-        celebrity_politician = None
-        highest_fame = -1
-
-        for sim_info in sim_info_manager.values():
-            if sim_info.id == current_dictator_id or sim_info.age not in (Age.YOUNGADULT, Age.ADULT, Age.ELDER):
-                continue
-
-            fame_val = 0
-            if fame_tuning is not None and sim_info.statistic_tracker is not None:
-                stat_inst = sim_info.statistic_tracker.get_statistic(fame_tuning)
-                if stat_inst is not None:
-                    fame_val = stat_inst.get_value()
-
-            if fame_val > highest_fame:
-                highest_fame = fame_val
-                celebrity_politician = sim_info
-
-        if celebrity_politician is None:
-            valid_adults = [s for s in sim_info_manager.values() if s.id != current_dictator_id and s.age in (Age.YOUNGADULT, Age.ADULT, Age.ELDER)]
-            if valid_adults:
-                celebrity_politician = random.choice(valid_adults)
-            else:
-                sims4.commands.output("Not enough Sims to hold an election.", sims4.commands.CheatOutput(_connection=None))
+            sim_info_manager = services.sim_info_manager()
+            dictator_info = sim_info_manager.get(current_dictator_id)
+            if dictator_info is None:
                 return False
 
-        sims4.commands.output(f"ELECTION DAY: {dictator_info.full_name} (Dictatorship) vs {celebrity_politician.full_name} (Celebrity Politician)!", sims4.commands.CheatOutput(_connection=None))
+            FAME_STAT_ID = 188229
+            import sims4.resources
+            stat_manager = services.get_instance_manager(sims4.resources.Types.STATISTIC)
+            fame_tuning = stat_manager.get(FAME_STAT_ID)
 
-        dictator_votes = 0
-        politician_votes = 0
-        voters = [s for s in sim_info_manager.values() if s.age in (Age.TEEN, Age.YOUNGADULT, Age.ADULT, Age.ELDER)]
+            celebrity_politician = None
+            highest_fame = -1
 
-        for voter in voters:
-            if voter.id == current_dictator_id:
-                dictator_votes += 1
-                continue
-            if voter.id == celebrity_politician.id:
-                politician_votes += 1
-                continue
+            for sim_info in sim_info_manager.values():
+                if sim_info.id == current_dictator_id or sim_info.age not in (Age.YOUNGADULT, Age.ADULT, Age.ELDER):
+                    continue
 
-            eco_footprint_score = 0
-            if voter.statistic_tracker is not None:
-                eco_stat = stat_manager.get(231429)
-                if eco_stat is not None:
-                    stat_inst = voter.statistic_tracker.get_statistic(eco_stat)
+                fame_val = 0
+                if fame_tuning is not None and sim_info.statistic_tracker is not None:
+                    stat_inst = sim_info.statistic_tracker.get_statistic(fame_tuning)
                     if stat_inst is not None:
-                        val = stat_inst.get_value()
-                        if val < -100: eco_footprint_score = -1
-                        elif val > 100: eco_footprint_score = 1
+                        fame_val = stat_inst.get_value()
 
-            if eco_footprint_score == 0 and random.random() < 0.4:
-                eco_footprint_score = random.choice([-1, 1])
+                if fame_val > highest_fame:
+                    highest_fame = fame_val
+                    celebrity_politician = sim_info
 
-            vote_dictator_chance = 0.50
-            if dictator_reputation > 30: vote_dictator_chance += 0.15
-            elif dictator_reputation < -30: vote_dictator_chance -= 0.15
+            if celebrity_politician is None:
+                valid_adults = [s for s in sim_info_manager.values() if s.id != current_dictator_id and s.age in (Age.YOUNGADULT, Age.ADULT, Age.ELDER)]
+                if valid_adults:
+                    celebrity_politician = random.choice(valid_adults)
+                else:
+                    sims4.commands.output("Not enough Sims to hold an election.", sims4.commands.CheatOutput(_connection=None))
+                    return False
 
-            if eco_footprint_score == -1: vote_dictator_chance += 0.35
-            elif eco_footprint_score == 1: vote_dictator_chance -= 0.35
+            sims4.commands.output(f"ELECTION DAY: {dictator_info.full_name} (Dictatorship) vs {celebrity_politician.full_name} (Celebrity Politician)!", sims4.commands.CheatOutput(_connection=None))
 
-            vote_dictator_chance = max(0.05, min(0.95, vote_dictator_chance))
+            dictator_votes = 0
+            politician_votes = 0
+            voters = [s for s in sim_info_manager.values() if s.age in (Age.TEEN, Age.YOUNGADULT, Age.ADULT, Age.ELDER)]
 
-            if random.random() < vote_dictator_chance:
-                dictator_votes += 1
+            for voter in voters:
+                if voter.id == current_dictator_id:
+                    dictator_votes += 1
+                    continue
+                if voter.id == celebrity_politician.id:
+                    politician_votes += 1
+                    continue
+
+                eco_footprint_score = 0
+                if voter.statistic_tracker is not None:
+                    eco_stat = stat_manager.get(231429)
+                    if eco_stat is not None:
+                        stat_inst = voter.statistic_tracker.get_statistic(eco_stat)
+                        if stat_inst is not None:
+                            val = stat_inst.get_value()
+                            if val < -100: eco_footprint_score = -1
+                            elif val > 100: eco_footprint_score = 1
+
+                if eco_footprint_score == 0 and random.random() < 0.4:
+                    eco_footprint_score = random.choice([-1, 1])
+
+                vote_dictator_chance = 0.50
+                if dictator_reputation > 30: vote_dictator_chance += 0.15
+                elif dictator_reputation < -30: vote_dictator_chance -= 0.15
+
+                if eco_footprint_score == -1: vote_dictator_chance += 0.35
+                elif eco_footprint_score == 1: vote_dictator_chance -= 0.35
+
+                vote_dictator_chance = max(0.05, min(0.95, vote_dictator_chance))
+
+                if random.random() < vote_dictator_chance:
+                    dictator_votes += 1
+                else:
+                    politician_votes += 1
+
+            sims4.commands.output(f"RESULTS: {dictator_votes} votes for {dictator_info.full_name}, {politician_votes} votes for {celebrity_politician.full_name}.", sims4.commands.CheatOutput(_connection=None))
+
+            if dictator_votes >= politician_votes:
+                sims4.commands.output(f"VICTORY! The Dictatorship remains in power. (Reputation +20)", sims4.commands.CheatOutput(_connection=None))
+                dictator_reputation += 20
             else:
-                politician_votes += 1
+                sims4.commands.output(f"DEFEAT! The Celebrity Politician {celebrity_politician.full_name} won the popular vote! The Dictator was overthrown.", sims4.commands.CheatOutput(_connection=None))
+                current_dictator_id = None
 
-        sims4.commands.output(f"RESULTS: {dictator_votes} votes for {dictator_info.full_name}, {politician_votes} votes for {celebrity_politician.full_name}.", sims4.commands.CheatOutput(_connection=None))
+            return True
+            yield
+else:
+    DictatorElectionInteraction = None
+if SUPER_INTERACTION_CLASS is not None:
+    @inject_to(SUPER_INTERACTION_CLASS, 'test')
+    def _hook_super_interaction_test(original_function, self, *args, **kwargs):
+        result = original_function(self, *args, **kwargs)
 
-        if dictator_votes >= politician_votes:
-            sims4.commands.output(f"VICTORY! The Dictatorship remains in power. (Reputation +20)", sims4.commands.CheatOutput(_connection=None))
-            dictator_reputation += 20
-        else:
-            sims4.commands.output(f"DEFEAT! The Celebrity Politician {celebrity_politician.full_name} won the popular vote! The Dictator was overthrown.", sims4.commands.CheatOutput(_connection=None))
-            current_dictator_id = None
+        # If the test passed naturally, we just return it.
+        if result:
+            return result
 
-        return True
-        yield
+        global current_dictator_id
+        if current_dictator_id is None:
+            return result
 
-@inject_method(interactions.base.super_interaction.SuperInteraction, 'test')
-def _hook_super_interaction_test(original_function, self, *args, **kwargs):
-    result = original_function(self, *args, **kwargs)
+        # kwargs usually has 'context' from which we can get the interacting sim
+        context = kwargs.get('context')
+        if context is None and args:
+            # Sometimes context is the first arg if it's not a kwarg
+            context = args[0]
 
-    # If the test passed naturally, we just return it.
-    if result:
+        if context is not None and getattr(context, 'sim', None) is not None:
+            sim = context.sim
+            if sim.id == current_dictator_id:
+                # We check if the interaction belongs to NAP voting boards/mailboxes.
+                # Interactions related to NAPs usually contain 'civic_policy' or 'voting' in their tuning name.
+                # In Sims 4, `self.__name__` or `type(self).__name__` gives the tuning name.
+                interaction_name = type(self).__name__.lower()
+                if 'civic_policy' in interaction_name or 'voting' in interaction_name or 'nap' in interaction_name:
+                    # Override the test failure! The Dictator can do what they want, even if they are an infant.
+                    return TestResult.TRUE
+
         return result
-
-    global current_dictator_id
-    if current_dictator_id is None:
-        return result
-
-    # kwargs usually has 'context' from which we can get the interacting sim
-    context = kwargs.get('context')
-    if context is None and args:
-        # Sometimes context is the first arg if it's not a kwarg
-        context = args[0]
-
-    if context is not None and getattr(context, 'sim', None) is not None:
-        sim = context.sim
-        if sim.id == current_dictator_id:
-            # We check if the interaction belongs to NAP voting boards/mailboxes.
-            # Interactions related to NAPs usually contain 'civic_policy' or 'voting' in their tuning name.
-            # In Sims 4, `self.__name__` or `type(self).__name__` gives the tuning name.
-            interaction_name = type(self).__name__.lower()
-            if 'civic_policy' in interaction_name or 'voting' in interaction_name or 'nap' in interaction_name:
-                # Override the test failure! The Dictator can do what they want, even if they are an infant.
-                return TestResult.TRUE
-
-    return result
 
 _interaction_injected = False
 
-@inject_method(zone.Zone, 'do_zone_spin_up')
+@inject_to(zone.Zone, 'do_zone_spin_up')
 def _hook_zone_spin_up_for_interaction(original_function, self, *args, **kwargs):
     result = original_function(self, *args, **kwargs)
 
     global _interaction_injected
-    if not _interaction_injected:
-        import sims4.resources
-        object_manager = services.get_instance_manager(sims4.resources.Types.OBJECT)
-        # Tuning IDs for Community Board (236746) and Mailbox (14757)
-        board_tuning = object_manager.get(236746)
-        mailbox_tuning = object_manager.get(14757)
+    if not _interaction_injected and SUPER_INTERACTION_CLASS is not None:
+        try:
+            import sims4.resources
+            object_manager = services.get_instance_manager(sims4.resources.Types.OBJECT)
+            # Tuning IDs for Community Board (236746) and Mailbox (14757)
+            board_tuning = object_manager.get(236746)
+            mailbox_tuning = object_manager.get(14757)
 
-        if board_tuning is not None:
-            # We must convert the immutable tuple to a list to append, then back to tuple
-            affordances = list(board_tuning._super_affordances)
-            if DictatorElectionInteraction not in affordances:
-                affordances.append(DictatorElectionInteraction)
-                board_tuning._super_affordances = tuple(affordances)
+            if board_tuning is not None:
+                # We must convert the immutable tuple to a list to append, then back to tuple
+                affordances = list(board_tuning._super_affordances)
+                if DictatorElectionInteraction not in affordances:
+                    affordances.append(DictatorElectionInteraction)
+                    board_tuning._super_affordances = tuple(affordances)
 
-        if mailbox_tuning is not None:
-            affordances = list(mailbox_tuning._super_affordances)
-            if DictatorElectionInteraction not in affordances:
-                affordances.append(DictatorElectionInteraction)
-                mailbox_tuning._super_affordances = tuple(affordances)
+            if mailbox_tuning is not None:
+                affordances = list(mailbox_tuning._super_affordances)
+                if DictatorElectionInteraction not in affordances:
+                    affordances.append(DictatorElectionInteraction)
+                    mailbox_tuning._super_affordances = tuple(affordances)
 
-        _interaction_injected = True
+            _interaction_injected = True
+        except Exception as e:
+            sims4.commands.output(f"Error injecting election interaction: {e}", sims4.commands.CheatOutput(_connection=None))
 
     return result
 
