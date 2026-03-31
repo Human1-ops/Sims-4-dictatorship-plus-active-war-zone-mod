@@ -6,7 +6,8 @@ import random
 import alarms
 import date_and_time
 import zone
-from world.region import Region
+from event_testing.results import TestResult
+import sims4.localization
 
 # --- Initialization Check ---
 @sims4.commands.Command('dictator.ping', command_type=sims4.commands.CommandType.Live)
@@ -211,10 +212,6 @@ def remove_rule(rule_name: str, _connection=None):
         output(f"Rule '{rule_name}' is not currently active.")
         return False
 
-import sims4.resources
-from interactions.context import InteractionContext
-import interactions.priority
-
 def _find_military_sim(target_id):
     """Finds an instantiated Sim in the Military career.
     Falls back to any instantiated active Sim if none found."""
@@ -289,6 +286,8 @@ def break_rule(rule_name: str, opt_target: OptionalTargetParam = None, _connecti
         fight_interaction = interaction_manager.get(FIGHT_INTERACTION_ID)
 
         if fight_interaction is not None:
+            from interactions.context import InteractionContext
+            import interactions.priority
             # Create an interaction context for the enforcer.
             context = InteractionContext(
                 enforcer_sim,
@@ -449,8 +448,8 @@ def _war_ticker_callback(_):
     if current_dictator_id is None:
         # If the dictator dies/falls, wars slowly end.
         if active_war_zones and random.random() < 0.5:
-            ended_region_id = active_war_zones.pop()
-            sims4.commands.output(f"With the regime gone, peace returns to a former war zone.", sims4.commands.CheatOutput(_connection=None))
+            active_war_zones.pop()
+            sims4.commands.output("With the regime gone, peace returns to a former war zone.", sims4.commands.CheatOutput(_connection=None))
         return
 
     # 5% chance of a random political scandal occurring every tick
@@ -489,6 +488,7 @@ def _trigger_active_war_skirmish():
     """A skirmish happens on the active lot because it's in a war zone.
        Pure script implementation (no custom XML Situations)."""
     global current_dictator_id, military_allegiances, active_war_zones
+    import sims4.commands
     sims4.commands.output("WARNING: The active neighborhood is a WAR ZONE! A skirmish has erupted!", sims4.commands.CheatOutput(_connection=None))
 
     # 1. Manually find and spawn Military Sims via Script
@@ -707,14 +707,27 @@ def _trigger_active_war_skirmish():
                 victim.destroy()
 
 def inject_to(target_object, target_function_name):
-    """A safer injection method that intercepts the original function and replaces it."""
+    """A highly safe injection method that captures the original function at injection time if possible,
+       or defers it to run time, preventing immediate AttributeErrors during script parsing."""
     def _inject_to(new_function):
-        original_function = getattr(target_object, target_function_name)
+        # We try to get it now, but if it fails (because the module isn't fully loaded),
+        # we will grab it when the wrapper is called.
+        try:
+            original_function = getattr(target_object, target_function_name)
+        except AttributeError:
+            original_function = None
 
         def _wrapper(*args, **kwargs):
+            nonlocal original_function
+            if original_function is None:
+                original_function = getattr(target_object, target_function_name)
             return new_function(original_function, *args, **kwargs)
 
-        setattr(target_object, target_function_name, _wrapper)
+        # Only inject if we can actually set the attribute
+        try:
+            setattr(target_object, target_function_name, _wrapper)
+        except Exception:
+            pass
         return _wrapper
     return _inject_to
 
@@ -966,8 +979,6 @@ def travel_to_war(_connection=None):
     destination_region_id = random.choice(offscreen_wars)
 
     # Pick a random lot in the destination region
-    import build_buy
-    from server.client import Client
 
     all_zones = services.get_persistence_service().get_save_game_data_proto().zones
     valid_destinations = []
@@ -995,7 +1006,7 @@ def travel_to_war(_connection=None):
 
     destination_zone_id = random.choice(valid_destinations)
 
-    output(f"The Dictator is traveling to the front lines! Loading screen incoming...")
+    output("The Dictator is traveling to the front lines! Loading screen incoming...")
 
     # Force travel for the active household
     client = services.client_manager().get_first_client()
@@ -1024,8 +1035,6 @@ def deploy_training(opt_target: OptionalTargetParam = None, _connection=None):
         return False
 
     # Pick a random lot in the world that isn't the current one to travel to
-    import build_buy
-    from server.client import Client
 
     current_zone_id = services.current_zone_id()
     all_zones = services.get_persistence_service().get_save_game_data_proto().zones
@@ -1118,9 +1127,6 @@ def draft_sim(opt_target: OptionalTargetParam = None, _connection=None):
 
 # --- Interaction Hooks for Voting Board ---
 
-from event_testing.results import TestResult
-import sims4.localization
-
 # Ensure the interactions module doesn't crash the script on load if it's not ready
 try:
     import interactions.base.super_interaction
@@ -1149,6 +1155,7 @@ if SUPER_INTERACTION_CLASS is not None:
             return sims4.localization._create_localized_string(VOTE_STRING_ID)
 
         def _run_interaction_gen(self, timeline):
+            import sims4.commands
             global current_dictator_id, dictator_reputation
             sims4.commands.output("Election interaction started on the board!", sims4.commands.CheatOutput(_connection=None))
 
@@ -1208,18 +1215,24 @@ if SUPER_INTERACTION_CLASS is not None:
                         stat_inst = voter.statistic_tracker.get_statistic(eco_stat)
                         if stat_inst is not None:
                             val = stat_inst.get_value()
-                            if val < -100: eco_footprint_score = -1
-                            elif val > 100: eco_footprint_score = 1
+                        if val < -100:
+                            eco_footprint_score = -1
+                        elif val > 100:
+                            eco_footprint_score = 1
 
                 if eco_footprint_score == 0 and random.random() < 0.4:
                     eco_footprint_score = random.choice([-1, 1])
 
                 vote_dictator_chance = 0.50
-                if dictator_reputation > 30: vote_dictator_chance += 0.15
-                elif dictator_reputation < -30: vote_dictator_chance -= 0.15
+                if dictator_reputation > 30:
+                    vote_dictator_chance += 0.15
+                elif dictator_reputation < -30:
+                    vote_dictator_chance -= 0.15
 
-                if eco_footprint_score == -1: vote_dictator_chance += 0.35
-                elif eco_footprint_score == 1: vote_dictator_chance -= 0.35
+                if eco_footprint_score == -1:
+                    vote_dictator_chance += 0.35
+                elif eco_footprint_score == 1:
+                    vote_dictator_chance -= 0.35
 
                 vote_dictator_chance = max(0.05, min(0.95, vote_dictator_chance))
 
@@ -1231,7 +1244,7 @@ if SUPER_INTERACTION_CLASS is not None:
             sims4.commands.output(f"RESULTS: {dictator_votes} votes for {dictator_info.full_name}, {politician_votes} votes for {celebrity_politician.full_name}.", sims4.commands.CheatOutput(_connection=None))
 
             if dictator_votes >= politician_votes:
-                sims4.commands.output(f"VICTORY! The Dictatorship remains in power. (Reputation +20)", sims4.commands.CheatOutput(_connection=None))
+                sims4.commands.output("VICTORY! The Dictatorship remains in power. (Reputation +20)", sims4.commands.CheatOutput(_connection=None))
                 dictator_reputation += 20
             else:
                 sims4.commands.output(f"DEFEAT! The Celebrity Politician {celebrity_politician.full_name} won the popular vote! The Dictator was overthrown.", sims4.commands.CheatOutput(_connection=None))
@@ -1241,6 +1254,7 @@ if SUPER_INTERACTION_CLASS is not None:
             yield
 else:
     DictatorElectionInteraction = None
+
 if SUPER_INTERACTION_CLASS is not None:
     @inject_to(SUPER_INTERACTION_CLASS, 'test')
     def _hook_super_interaction_test(original_function, self, *args, **kwargs):
@@ -1310,6 +1324,7 @@ def _hook_zone_spin_up_for_interaction(original_function, self, *args, **kwargs)
 @sims4.commands.Command('dictator.hold_election', command_type=sims4.commands.CommandType.Live)
 def hold_election(_connection=None):
     """Holds a simulated election between the Dictatorship and a Celebrity 'Normal Politician'."""
+    import sims4.commands
     output = sims4.commands.CheatOutput(_connection)
     global current_dictator_id, dictator_reputation
 
@@ -1399,8 +1414,10 @@ def hold_election(_connection=None):
                 if stat_inst is not None:
                     # Usually ranges from -500 to 500
                     val = stat_inst.get_value()
-                    if val < -100: eco_footprint_score = -1 # Industrial
-                    elif val > 100: eco_footprint_score = 1 # Green
+                    if val < -100:
+                        eco_footprint_score = -1 # Industrial
+                    elif val > 100:
+                        eco_footprint_score = 1 # Green
 
         # If no Eco Lifestyle installed, randomize it
         if eco_footprint_score == 0 and random.random() < 0.4:
@@ -1410,8 +1427,10 @@ def hold_election(_connection=None):
         vote_dictator_chance = 0.50
 
         # Reputation impact
-        if dictator_reputation > 30: vote_dictator_chance += 0.15
-        elif dictator_reputation < -30: vote_dictator_chance -= 0.15
+        if dictator_reputation > 30:
+            vote_dictator_chance += 0.15
+        elif dictator_reputation < -30:
+            vote_dictator_chance -= 0.15
 
         # Eco Footprint Impact
         if eco_footprint_score == -1: # Industrial / Bad Eco Footprint
@@ -1433,7 +1452,7 @@ def hold_election(_connection=None):
     output(f"RESULTS: {dictator_votes} votes for {dictator_info.full_name}, {politician_votes} votes for {celebrity_politician.full_name}.")
 
     if dictator_votes >= politician_votes:
-        output(f"VICTORY! The Dictatorship remains in power. (Reputation +20)")
+        output("VICTORY! The Dictatorship remains in power. (Reputation +20)")
         dictator_reputation += 20
     else:
         output(f"DEFEAT! The Celebrity Politician {celebrity_politician.full_name} won the popular vote! The Dictator was overthrown.")
