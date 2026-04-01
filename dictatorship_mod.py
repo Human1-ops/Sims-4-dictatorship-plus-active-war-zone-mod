@@ -1369,12 +1369,10 @@ def _create_election_interaction():
 virtual_traits = {}
 
 @sims4.commands.Command('dictator.add_trait', command_type=sims4.commands.CommandType.Live)
-def add_virtual_trait(sim_id: str="", trait_name: str="", _connection=None):
+def add_virtual_trait(first_name="", last_name="", trait_name="", _connection=None):
     output = sims4.commands.CheatOutput(_connection)
     try:
-        import services
-        sim_id_int = int(sim_id)
-        sim_info = services.sim_info_manager().get(sim_id_int)
+        sim_info = _find_sim_by_name(first_name, last_name)
 
         if not sim_info:
             output("Sim not found.")
@@ -1385,6 +1383,8 @@ def add_virtual_trait(sim_id: str="", trait_name: str="", _connection=None):
         if trait_name not in valid_traits:
             output(f"Invalid trait. Choose from: {', '.join(valid_traits)}")
             return False
+
+        sim_id_int = sim_info.sim_id
 
         if sim_id_int not in virtual_traits:
             virtual_traits[sim_id_int] = set()
@@ -1397,16 +1397,16 @@ def add_virtual_trait(sim_id: str="", trait_name: str="", _connection=None):
         return False
 
 @sims4.commands.Command('dictator.remove_trait', command_type=sims4.commands.CommandType.Live)
-def remove_virtual_trait(sim_id: str="", trait_name: str="", _connection=None):
+def remove_virtual_trait(first_name="", last_name="", trait_name="", _connection=None):
     output = sims4.commands.CheatOutput(_connection)
     try:
-        import services
-        sim_id_int = int(sim_id)
-        sim_info = services.sim_info_manager().get(sim_id_int)
+        sim_info = _find_sim_by_name(first_name, last_name)
 
         if not sim_info:
             output("Sim not found.")
             return False
+
+        sim_id_int = sim_info.sim_id
 
         if sim_id_int in virtual_traits and trait_name.lower() in virtual_traits[sim_id_int]:
             virtual_traits[sim_id_int].remove(trait_name.lower())
@@ -1420,16 +1420,16 @@ def remove_virtual_trait(sim_id: str="", trait_name: str="", _connection=None):
         return False
 
 @sims4.commands.Command('dictator.show_traits', command_type=sims4.commands.CommandType.Live)
-def show_virtual_traits(sim_id: str="", _connection=None):
+def show_virtual_traits(first_name="", last_name="", _connection=None):
     output = sims4.commands.CheatOutput(_connection)
     try:
-        import services
-        sim_id_int = int(sim_id)
-        sim_info = services.sim_info_manager().get(sim_id_int)
+        sim_info = _find_sim_by_name(first_name, last_name)
 
         if not sim_info:
             output("Sim not found.")
             return False
+
+        sim_id_int = sim_info.sim_id
 
         traits = virtual_traits.get(sim_id_int, set())
         if traits:
@@ -1463,32 +1463,41 @@ def simulate_trait_impacts():
             if trait == "true_believer":
                 # Gains Confident buff representing pride in regime
                 try:
-                    sim_info.add_buff_from_op(BUFF_CONFIDENT)
-                except:
+                    buff_type = services.get_instance_manager(sims4.resources.Types.BUFF).get(BUFF_CONFIDENT)
+                    if buff_type:
+                        sim_info.add_buff_from_op(buff_type)
+                except Exception as e:
                     pass
             elif trait == "paranoid":
                 # Gains Tense buff representing fear of informants
                 try:
-                    sim_info.add_buff_from_op(BUFF_TENSE)
-                except:
+                    buff_type = services.get_instance_manager(sims4.resources.Types.BUFF).get(BUFF_TENSE)
+                    if buff_type:
+                        sim_info.add_buff_from_op(buff_type)
+                except Exception as e:
                     pass
             elif trait == "submissive":
                 # Removes negative work-related buffs like bored, block playful
                 try:
-                    sim_info.remove_buff_by_type(BUFF_BORED)
-                    sim_info.remove_buff_by_type(BUFF_INSPIRED)
-                    sim_info.remove_buff_by_type(BUFF_PLAYFUL)
-                except:
+                    for buff_id in (BUFF_BORED, BUFF_INSPIRED, BUFF_PLAYFUL):
+                        buff_type = services.get_instance_manager(sims4.resources.Types.BUFF).get(buff_id)
+                        if buff_type:
+                            sim_info.remove_buff_by_type(buff_type)
+                except Exception as e:
                     pass
             elif trait == "dissident":
                 # Gains Angry buff reflecting hatred of the state
                 try:
-                    sim_info.add_buff_from_op(BUFF_ANGRY)
-                except:
+                    buff_type = services.get_instance_manager(sims4.resources.Types.BUFF).get(BUFF_ANGRY)
+                    if buff_type:
+                        sim_info.add_buff_from_op(buff_type)
+                except Exception as e:
                     pass
             elif trait == "opportunist":
                 # Gains Happy buff representing social climbing immunity
                 try:
-                    sim_info.add_buff_from_op(BUFF_HAPPY)
-                except:
+                    buff_type = services.get_instance_manager(sims4.resources.Types.BUFF).get(BUFF_HAPPY)
+                    if buff_type:
+                        sim_info.add_buff_from_op(buff_type)
+                except Exception as e:
                     pass
