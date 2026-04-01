@@ -1,6 +1,5 @@
 import sims4.commands
 import services
-from server_commands.argument_helpers import OptionalTargetParam, get_optional_target
 from sims.sim_info_types import Age
 import random
 import alarms
@@ -16,6 +15,17 @@ def _dictator_ping(_connection=None):
     output = sims4.commands.CheatOutput(_connection)
     output("Pong! The Dictatorship Mod has loaded successfully and is running.")
     return True
+
+
+def _find_sim_by_name(first_name: str, last_name: str):
+    """Helper to find a sim_info by first and last name from the sim_info_manager."""
+    first_name = first_name.lower()
+    last_name = last_name.lower()
+    sim_info_manager = services.sim_info_manager()
+    for sim_info in sim_info_manager.objects:
+        if sim_info.first_name.lower() == first_name and sim_info.last_name.lower() == last_name:
+            return sim_info
+    return None
 
 
 # --- Mod State ---
@@ -125,19 +135,19 @@ def check_reputation(_connection=None):
 @sims4.commands.Command(
     "dictator.make_dictator", command_type=sims4.commands.CommandType.Live
 )
-def make_dictator(opt_target: OptionalTargetParam = None, _connection=None):
+def make_dictator(first_name: str = "", last_name: str = "", _connection=None):
     output = sims4.commands.CheatOutput(_connection)
-    target = get_optional_target(opt_target, _connection)
 
-    if target is None:
-        output("No target found.")
+    target_info = _find_sim_by_name(first_name, last_name)
+    if target_info is None:
+        output("No target found. Make sure you typed the exact First and Last name.")
         return False
 
     global current_dictator_id, dictator_reputation
-    current_dictator_id = target.id
+    current_dictator_id = target_info.id
     dictator_reputation = 0  # Reset reputation for the new dictator
     output(
-        f"{target.full_name} is now the Dictator! Their reign begins with a neutral reputation."
+        f"{target_info.full_name} is now the Dictator! Their reign begins with a neutral reputation."
     )
     return True
 
@@ -277,23 +287,28 @@ def _find_military_sim(target_id):
     "dictator.break_rule", command_type=sims4.commands.CommandType.Live
 )
 def break_rule(
-    rule_name: str, opt_target: OptionalTargetParam = None, _connection=None
+    rule_name: str, first_name: str = "", last_name: str = "", _connection=None
 ):
     """Simulates a Sim breaking a rule and being punished via a physical fight."""
     output = sims4.commands.CheatOutput(_connection)
-    target_sim = get_optional_target(opt_target, _connection)
+
+    target_info = _find_sim_by_name(first_name, last_name)
+    if target_info is None:
+        output("No target found to break the rule. Provide First and Last name.")
+        return False
+
+    target_sim = target_info.get_sim_instance()
+    if target_sim is None:
+        output(f"{target_info.full_name} must be physically on the lot to break a rule and be punished!")
+        return False
 
     global current_dictator_id, active_rules
-
-    if target_sim is None:
-        output("No target found to break the rule.")
-        return False
 
     if current_dictator_id is None:
         output("There is no Dictator, so there are no rules to break.")
         return False
 
-    if target_sim.id == current_dictator_id:
+    if target_info.id == current_dictator_id:
         output("The Dictator is above the law!")
         return False
 
@@ -376,10 +391,14 @@ def break_rule(
 
 
 @sims4.commands.Command("dictator.arrest", command_type=sims4.commands.CommandType.Live)
-def arrest_sim(opt_target: OptionalTargetParam = None, _connection=None):
+def arrest_sim(first_name: str = "", last_name: str = "", _connection=None):
     """The Dictator instantly orders the arrest of a target Sim without a fight."""
     output = sims4.commands.CheatOutput(_connection)
-    target_sim = get_optional_target(opt_target, _connection)
+
+    target_info = _find_sim_by_name(first_name, last_name)
+    if target_info is None:
+        output("No target found to arrest. Provide First and Last name.")
+        return False
 
     global current_dictator_id, jailed_sims, dictator_reputation
 
@@ -387,47 +406,49 @@ def arrest_sim(opt_target: OptionalTargetParam = None, _connection=None):
         output("There is no Dictator to issue an arrest warrant.")
         return False
 
-    if target_sim is None:
-        output("No target found to arrest.")
-        return False
-
-    if target_sim.id == current_dictator_id:
+    if target_info.id == current_dictator_id:
         output("The Dictator cannot be arrested!")
         return False
 
     dictator_reputation -= 15
     output(
-        f"By decree of the Dictator, {target_sim.full_name} has been arrested and sent to jail for 3 Sim days! (Reputation -15)"
+        f"By decree of the Dictator, {target_info.full_name} has been arrested and sent to jail for 3 Sim days! (Reputation -15)"
     )
 
     time_span = date_and_time.create_time_span(days=3)
     alarm_handle = alarms.add_alarm(
-        target_sim.sim_info, time_span, lambda _: _release_from_jail(target_sim.id)
+        target_info, time_span, lambda _: _release_from_jail(target_info.id)
     )
-    jailed_sims[target_sim.id] = alarm_handle
+    jailed_sims[target_info.id] = alarm_handle
 
     # Send them to jail (despawn)
-    target_sim.destroy()
+    target_sim = target_info.get_sim_instance()
+    if target_sim is not None:
+        target_sim.destroy()
     return True
 
 
 @sims4.commands.Command("dictator.banish", command_type=sims4.commands.CommandType.Live)
-def banish(opt_target: OptionalTargetParam = None, _connection=None):
+def banish(first_name: str = "", last_name: str = "", _connection=None):
     output = sims4.commands.CheatOutput(_connection)
-    target = get_optional_target(opt_target, _connection)
+
+    target_info = _find_sim_by_name(first_name, last_name)
     global current_dictator_id, dictator_reputation
 
-    if target is None:
-        output("No target found.")
+    if target_info is None:
+        output("No target found. Provide First and Last name.")
         return False
 
-    if target.id == current_dictator_id:
+    if target_info.id == current_dictator_id:
         output("You cannot banish the Dictator!")
         return False
 
     dictator_reputation -= 20
-    output(f"{target.full_name} has been banished by the Dictator! (Reputation -20)")
-    target.destroy()
+    output(f"{target_info.full_name} has been banished by the Dictator! (Reputation -20)")
+
+    target_sim = target_info.get_sim_instance()
+    if target_sim is not None:
+        target_sim.destroy()
     return True
 
 
@@ -464,16 +485,16 @@ def demand_taxes(amount: int = 1000, _connection=None):
     "dictator.set_allegiance", command_type=sims4.commands.CommandType.Live
 )
 def set_allegiance(
-    allegiance: str, opt_target: OptionalTargetParam = None, _connection=None
+    allegiance: str, first_name: str = "", last_name: str = "", _connection=None
 ):
     """Sets the military allegiance of a Sim to 'dictatorship' or 'independence'."""
     output = sims4.commands.CheatOutput(_connection)
-    target_sim = get_optional_target(opt_target, _connection)
 
+    target_info = _find_sim_by_name(first_name, last_name)
     global military_allegiances
 
-    if target_sim is None:
-        output("No target found to set allegiance.")
+    if target_info is None:
+        output("No target found to set allegiance. Provide First and Last name.")
         return False
 
     allegiance = allegiance.lower()
@@ -481,9 +502,9 @@ def set_allegiance(
         output("Allegiance must be either 'dictatorship' or 'independence'.")
         return False
 
-    military_allegiances[target_sim.id] = allegiance
+    military_allegiances[target_info.id] = allegiance
     output(
-        f"{target_sim.full_name}'s allegiance has been set to: {allegiance.upper()}!"
+        f"{target_info.full_name}'s allegiance has been set to: {allegiance.upper()}!"
     )
     return True
 
@@ -1319,14 +1340,20 @@ def travel_to_war(_connection=None):
 @sims4.commands.Command(
     "dictator.deploy_training", command_type=sims4.commands.CommandType.Live
 )
-def deploy_training(opt_target: OptionalTargetParam = None, _connection=None):
+def deploy_training(first_name: str = "", last_name: str = "", _connection=None):
     """Forces the target military Sim (and the active household/camera) to travel to a random region for training."""
     output = sims4.commands.CheatOutput(_connection)
-    target_sim = get_optional_target(opt_target, _connection)
+
+    target_info = _find_sim_by_name(first_name, last_name)
     global active_training_deployment
 
+    if target_info is None:
+        output("No target found for training deployment. Provide First and Last name.")
+        return False
+
+    target_sim = target_info.get_sim_instance()
     if target_sim is None:
-        output("No target found for training deployment.")
+        output(f"{target_info.full_name} must be physically on the lot to be deployed for training.")
         return False
 
     # Pick a random lot in the world that isn't the current one to travel to
@@ -1370,11 +1397,11 @@ def deploy_training(opt_target: OptionalTargetParam = None, _connection=None):
 @sims4.commands.Command(
     "dictator.draft_sim", command_type=sims4.commands.CommandType.Live
 )
-def draft_sim(opt_target: OptionalTargetParam = None, _connection=None):
+def draft_sim(first_name: str = "", last_name: str = "", _connection=None):
     """The Dictator drafts a Sim into the military to fight in a random active warzone."""
     output = sims4.commands.CheatOutput(_connection)
-    target_sim = get_optional_target(opt_target, _connection)
 
+    target_info = _find_sim_by_name(first_name, last_name)
     global current_dictator_id, drafted_sims, active_war_zones, dictator_reputation
 
     if current_dictator_id is None:
@@ -1385,11 +1412,16 @@ def draft_sim(opt_target: OptionalTargetParam = None, _connection=None):
         output("There are no active wars! Sims cannot be drafted during peacetime.")
         return False
 
-    if target_sim is None:
-        output("No target found to draft.")
+    if target_info is None:
+        output("No target found to draft. Provide First and Last name.")
         return False
 
-    if target_sim.id == current_dictator_id:
+    target_sim = target_info.get_sim_instance()
+    if target_sim is None:
+        output(f"{target_info.full_name} must be physically on the lot to be drafted.")
+        return False
+
+    if target_info.id == current_dictator_id:
         output("The Dictator cannot draft themselves!")
         return False
 
@@ -1657,22 +1689,16 @@ def _hook_zone_spin_up_for_interaction(original_function, self, *args, **kwargs)
             import sims4.resources
 
             object_manager = services.get_instance_manager(sims4.resources.Types.OBJECT)
-            # Tuning IDs for Community Board (236746) and Mailbox (14757)
-            board_tuning = object_manager.get(236746)
-            mailbox_tuning = object_manager.get(14757)
-
-            if board_tuning is not None:
-                # We must convert the immutable tuple to a list to append, then back to tuple
-                affordances = list(board_tuning._super_affordances)
-                if DictatorElectionInteraction not in affordances:
-                    affordances.append(DictatorElectionInteraction)
-                    board_tuning._super_affordances = tuple(affordances)
-
-            if mailbox_tuning is not None:
-                affordances = list(mailbox_tuning._super_affordances)
-                if DictatorElectionInteraction not in affordances:
-                    affordances.append(DictatorElectionInteraction)
-                    mailbox_tuning._super_affordances = tuple(affordances)
+            # Loop through all object tuning and inject into anything that looks like a mailbox or community board
+            # because 14757 is just the base game residential mailbox, but there are apartments, eco lifestyle boards, etc.
+            for obj_tuning in object_manager.types.values():
+                name = getattr(obj_tuning, '__name__', '')
+                if 'mailbox' in name.lower() or 'communityboard' in name.lower() or 'civicpolicy' in name.lower():
+                    if hasattr(obj_tuning, '_super_affordances'):
+                        affordances = list(obj_tuning._super_affordances)
+                        if DictatorElectionInteraction not in affordances:
+                            affordances.append(DictatorElectionInteraction)
+                            obj_tuning._super_affordances = tuple(affordances)
 
             _interaction_injected = True
         except Exception as e:
@@ -1853,19 +1879,24 @@ def hold_election(_connection=None):
 @sims4.commands.Command(
     "dictator.illegal_vote", command_type=sims4.commands.CommandType.Live
 )
-def illegal_vote(opt_target: OptionalTargetParam = None, _connection=None):
+def illegal_vote(first_name: str = "", last_name: str = "", _connection=None):
     """Simulates the consequence of a Sim trying to vote while a Dictator is in power."""
     output = sims4.commands.CheatOutput(_connection)
-    target_sim = get_optional_target(opt_target, _connection)
 
+    target_info = _find_sim_by_name(first_name, last_name)
     global current_dictator_id
 
     if current_dictator_id is None:
         output("There is no Dictator in power, so voting is allowed.")
         return True
 
+    if target_info is None:
+        output("No target found for illegal voting. Provide First and Last name.")
+        return False
+
+    target_sim = target_info.get_sim_instance()
     if target_sim is None:
-        output("No target found for illegal voting.")
+        output(f"{target_info.full_name} must be physically on the lot to face consequences for illegal voting.")
         return False
 
     if target_sim.id == current_dictator_id:
