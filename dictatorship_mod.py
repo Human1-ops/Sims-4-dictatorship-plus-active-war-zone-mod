@@ -1,3 +1,4 @@
+import sims4.tuning.instances
 import sims4.commands
 import services
 from sims.sim_info_types import Age
@@ -22,7 +23,7 @@ def _find_sim_by_name(first_name: str, last_name: str):
     first_name = first_name.lower()
     last_name = last_name.lower()
     sim_info_manager = services.sim_info_manager()
-    for sim_info in sim_info_manager.objects:
+    for sim_info in sim_info_manager.values():
         if sim_info.first_name.lower() == first_name and sim_info.last_name.lower() == last_name:
             return sim_info
     return None
@@ -135,7 +136,7 @@ def check_reputation(_connection=None):
 @sims4.commands.Command(
     "dictator.make_dictator", command_type=sims4.commands.CommandType.Live
 )
-def make_dictator(first_name: str = "", last_name: str = "", _connection=None):
+def make_dictator(first_name="", last_name="", _connection=None):
     output = sims4.commands.CheatOutput(_connection)
 
     target_info = _find_sim_by_name(first_name, last_name)
@@ -209,7 +210,7 @@ def dictator_die(_connection=None):
 @sims4.commands.Command(
     "dictator.set_rule", command_type=sims4.commands.CommandType.Live
 )
-def set_rule(rule_name: str, _connection=None):
+def set_rule(rule_name="", _connection=None):
     output = sims4.commands.CheatOutput(_connection)
     global current_dictator_id, active_rules, dictator_reputation
 
@@ -230,7 +231,7 @@ def set_rule(rule_name: str, _connection=None):
 @sims4.commands.Command(
     "dictator.remove_rule", command_type=sims4.commands.CommandType.Live
 )
-def remove_rule(rule_name: str, _connection=None):
+def remove_rule(rule_name="", _connection=None):
     output = sims4.commands.CheatOutput(_connection)
     global current_dictator_id, active_rules, dictator_reputation
 
@@ -287,7 +288,7 @@ def _find_military_sim(target_id):
     "dictator.break_rule", command_type=sims4.commands.CommandType.Live
 )
 def break_rule(
-    rule_name: str, first_name: str = "", last_name: str = "", _connection=None
+    rule_name: str, first_name="", last_name="", _connection=None
 ):
     """Simulates a Sim breaking a rule and being punished via a physical fight."""
     output = sims4.commands.CheatOutput(_connection)
@@ -391,7 +392,7 @@ def break_rule(
 
 
 @sims4.commands.Command("dictator.arrest", command_type=sims4.commands.CommandType.Live)
-def arrest_sim(first_name: str = "", last_name: str = "", _connection=None):
+def arrest_sim(first_name="", last_name="", _connection=None):
     """The Dictator instantly orders the arrest of a target Sim without a fight."""
     output = sims4.commands.CheatOutput(_connection)
 
@@ -429,7 +430,7 @@ def arrest_sim(first_name: str = "", last_name: str = "", _connection=None):
 
 
 @sims4.commands.Command("dictator.banish", command_type=sims4.commands.CommandType.Live)
-def banish(first_name: str = "", last_name: str = "", _connection=None):
+def banish(first_name="", last_name="", _connection=None):
     output = sims4.commands.CheatOutput(_connection)
 
     target_info = _find_sim_by_name(first_name, last_name)
@@ -455,7 +456,7 @@ def banish(first_name: str = "", last_name: str = "", _connection=None):
 @sims4.commands.Command(
     "dictator.demand_taxes", command_type=sims4.commands.CommandType.Live
 )
-def demand_taxes(amount: int = 1000, _connection=None):
+def demand_taxes(amount=1000, _connection=None):
     output = sims4.commands.CheatOutput(_connection)
 
     global current_dictator_id, dictator_reputation
@@ -485,7 +486,7 @@ def demand_taxes(amount: int = 1000, _connection=None):
     "dictator.set_allegiance", command_type=sims4.commands.CommandType.Live
 )
 def set_allegiance(
-    allegiance: str, first_name: str = "", last_name: str = "", _connection=None
+    allegiance: str, first_name="", last_name="", _connection=None
 ):
     """Sets the military allegiance of a Sim to 'dictatorship' or 'independence'."""
     output = sims4.commands.CheatOutput(_connection)
@@ -1340,7 +1341,7 @@ def travel_to_war(_connection=None):
 @sims4.commands.Command(
     "dictator.deploy_training", command_type=sims4.commands.CommandType.Live
 )
-def deploy_training(first_name: str = "", last_name: str = "", _connection=None):
+def deploy_training(first_name="", last_name="", _connection=None):
     """Forces the target military Sim (and the active household/camera) to travel to a random region for training."""
     output = sims4.commands.CheatOutput(_connection)
 
@@ -1397,7 +1398,7 @@ def deploy_training(first_name: str = "", last_name: str = "", _connection=None)
 @sims4.commands.Command(
     "dictator.draft_sim", command_type=sims4.commands.CommandType.Live
 )
-def draft_sim(first_name: str = "", last_name: str = "", _connection=None):
+def draft_sim(first_name="", last_name="", _connection=None):
     """The Dictator drafts a Sim into the military to fight in a random active warzone."""
     output = sims4.commands.CheatOutput(_connection)
 
@@ -1499,8 +1500,13 @@ if SUPER_INTERACTION_CLASS is not None:
                 return TestResult(False, "Only the Dictator can hold the election.")
             return TestResult.TRUE
 
+        @property
+        def display_name(self):
+            # Using 0x61AE64E0 (Base Game "Vote") if available, otherwise using the VOTE_STRING_ID constant
+            return sims4.localization._create_localized_string(0x61AE64E0)
+
         def get_name(self, target=None, context=None, **kwargs):
-            return sims4.localization._create_localized_string(VOTE_STRING_ID)
+            return sims4.localization._create_localized_string(0x61AE64E0)
 
         def _run_interaction_gen(self, timeline):
             import sims4.commands
@@ -1679,33 +1685,21 @@ if SUPER_INTERACTION_CLASS is not None:
 _interaction_injected = False
 
 
-@inject_to(zone.Zone, "do_zone_spin_up")
-def _hook_zone_spin_up_for_interaction(original_function, self, *args, **kwargs):
-    result = original_function(self, *args, **kwargs)
+@inject_to(sims4.tuning.instances.HashedTunedInstanceMetaclass, '__init__')
+def _inject_custom_interactions_into_objects(original, self, name, bases, namespace):
+    result = original(self, name, bases, namespace)
 
-    global _interaction_injected
-    if not _interaction_injected and SUPER_INTERACTION_CLASS is not None:
-        try:
-            import sims4.resources
+    # We only want to inject once the class has fully initialized its tuning
+    if not hasattr(self, '_super_affordances'):
+        return result
 
-            object_manager = services.get_instance_manager(sims4.resources.Types.OBJECT)
-            # Loop through all object tuning and inject into anything that looks like a mailbox or community board
-            # because 14757 is just the base game residential mailbox, but there are apartments, eco lifestyle boards, etc.
-            for obj_tuning in object_manager.types.values():
-                name = getattr(obj_tuning, '__name__', '')
-                if 'mailbox' in name.lower() or 'communityboard' in name.lower() or 'civicpolicy' in name.lower():
-                    if hasattr(obj_tuning, '_super_affordances'):
-                        affordances = list(obj_tuning._super_affordances)
-                        if DictatorElectionInteraction not in affordances:
-                            affordances.append(DictatorElectionInteraction)
-                            obj_tuning._super_affordances = tuple(affordances)
+    class_name = getattr(self, '__name__', '').lower()
 
-            _interaction_injected = True
-        except Exception as e:
-            sims4.commands.output(
-                f"Error injecting election interaction: {e}",
-                sims4.commands.CheatOutput(_connection=None),
-            )
+    if 'mailbox' in class_name or 'communityboard' in class_name or 'civicpolicy' in class_name:
+        if DictatorElectionInteraction not in self._super_affordances:
+            affordances = list(self._super_affordances)
+            affordances.append(DictatorElectionInteraction)
+            self._super_affordances = tuple(affordances)
 
     return result
 
@@ -1879,7 +1873,7 @@ def hold_election(_connection=None):
 @sims4.commands.Command(
     "dictator.illegal_vote", command_type=sims4.commands.CommandType.Live
 )
-def illegal_vote(first_name: str = "", last_name: str = "", _connection=None):
+def illegal_vote(first_name="", last_name="", _connection=None):
     """Simulates the consequence of a Sim trying to vote while a Dictator is in power."""
     output = sims4.commands.CheatOutput(_connection)
 
