@@ -1219,6 +1219,53 @@ def inject_to(target_module_name, target_function_name):
             return new_function
     return _inject_to
 
+@inject_to("interactions.base.super_interaction", "SuperInteraction.test")
+def _super_interaction_test_override(original_function, cls, *args, **kwargs):
+    result = original_function(cls, *args, **kwargs)
+
+    if current_dictator_id is None:
+        return result
+
+    try:
+        from event_testing.results import TestResult
+        interaction_name = cls.__name__.lower()
+        if "vote" in interaction_name or "civicpolicy" in interaction_name:
+            # test() is a classmethod, so we must inspect kwargs context to find the sim
+            context = kwargs.get('context')
+            if context and hasattr(context, 'sim') and context.sim:
+                sim_info = context.sim.sim_info
+                if sim_info.sim_id == current_dictator_id:
+                    return TestResult.TRUE
+    except Exception as e:
+        pass
+
+    return result
+
+@inject_to("interactions.base.super_interaction", "SuperInteraction.on_started")
+def _super_interaction_on_started_hook(original_function, self, *args, **kwargs):
+    original_function(self, *args, **kwargs)
+
+    if current_dictator_id is None:
+        return
+
+    try:
+        import random
+        interaction_name = self.__class__.__name__.lower()
+        if "vote" in interaction_name or "civicpolicy" in interaction_name:
+            sim_info = self.sim.sim_info
+
+            # The dictator is exempt.
+            if sim_info.sim_id == current_dictator_id:
+                return
+
+            # Otherwise, they are risking an illegal vote! 30% chance of getting caught!
+            if random.random() < 0.30:
+                import sims4.commands
+                # We trigger the same logic as the dictator.illegal_vote command!
+                sims4.commands.client_cheat(f"dictator.illegal_vote \"{sim_info.first_name}\" \"{sim_info.last_name}\"", None)
+    except Exception as e:
+        pass
+
 @inject_to("zone", "Zone.do_zone_spin_up")
 def _hook_zone_spin_up(original_function, self, *args, **kwargs):
     result = original_function(self, *args, **kwargs)
