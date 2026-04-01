@@ -474,6 +474,10 @@ def _war_ticker_callback(_):
 
     _simulate_offscreen_wars(current_region_id)
 
+    # 15% chance to trigger an autonomous training deployment (similar to an active career day)
+    if random.random() < 0.15:
+        _trigger_autonomous_training_deployment()
+
 def _simulate_offscreen_wars(active_region_id):
     import random
     import alarms
@@ -521,6 +525,66 @@ def _simulate_offscreen_wars(active_region_id):
                 time_span = date_and_time.create_time_span(days=deploy_duration)
                 alarm_handle = alarms.add_alarm(deploy_sim, time_span, lambda _, s_id=deploy_sim.id: _return_from_war(s_id))
                 drafted_sims[deploy_sim.id] = alarm_handle
+
+def _trigger_autonomous_training_deployment():
+    import random
+    global current_dictator_id, active_training_deployment
+
+    if current_dictator_id is None:
+        return
+
+    services = _get_services()
+    sim_info_manager = services.sim_info_manager()
+    available_military = []
+
+    for sim_info in sim_info_manager.values():
+        if sim_info.id == current_dictator_id:
+            continue
+        if sim_info.id in drafted_sims:
+            continue
+
+        # Only select Sims that are currently active/instantiated
+        if sim_info.get_sim_instance() is None:
+            continue
+
+        if sim_info.career_tracker is not None:
+            for career_uid, career in sim_info.career_tracker.careers.items():
+                if career_uid == MILITARY_CAREER_TRACK_ID:
+                    available_military.append(sim_info)
+                    break
+
+    if not available_military:
+        return
+
+    target_sim_info = random.choice(available_military)
+    target_sim = target_sim_info.get_sim_instance()
+
+    if target_sim is None:
+        return
+
+    current_zone_id = services.current_zone_id()
+    all_zones = services.get_persistence_service().get_save_game_data_proto().zones
+
+    valid_destinations = [z.zone_id for z in all_zones if z.zone_id != current_zone_id]
+
+    if not valid_destinations:
+        return
+
+    destination_zone_id = random.choice(valid_destinations)
+
+    import sims4.commands
+    sims4.commands.output(f"ACTIVE DUTY: {target_sim.full_name} is being autonomously deployed to a foreign region for active training! Loading screen incoming...", sims4.commands.CheatOutput(_connection=None))
+
+    active_training_deployment = target_sim.id
+
+    client = services.client_manager().get_first_client()
+    if client is not None:
+        active_household = client.household
+        if active_household is not None:
+            travel_sim_ids = list(active_household.sim_ids)
+            if target_sim.id not in travel_sim_ids:
+                travel_sim_ids.append(target_sim.id)
+            services.get_zone_situation_manager()._travel_to_zone(destination_zone_id, travel_sim_ids)
 
 def _trigger_active_war_skirmish():
     global current_dictator_id, military_allegiances, active_war_zones
@@ -1160,6 +1224,28 @@ def _hook_zone_spin_up(original_function, self, *args, **kwargs):
     import alarms
     import date_and_time
 
+    # Aggressively inject our election interaction into all mailboxes and community boards
+    # Since the zone is fully spinning up, tuning instances are guaranteed to be loaded.
+    try:
+        import sims4.resources
+        object_manager = _get_services().get_instance_manager(sims4.resources.Types.OBJECT)
+        if object_manager is not None:
+            interaction_cls = _create_election_interaction()
+            if interaction_cls is not None:
+                for obj_tuning in object_manager.types.values():
+                    class_name = getattr(obj_tuning, '__name__', '').lower()
+                    # Mailboxes often have 'mailbox' in their name, but base game residential is just 'mailbox'
+                    # We also inject into anything labeled community board
+                    if 'mailbox' in class_name or 'communityboard' in class_name or 'civicpolicy' in class_name:
+                        if hasattr(obj_tuning, '_super_affordances'):
+                            affordances = list(obj_tuning._super_affordances)
+                            if interaction_cls not in affordances:
+                                affordances.append(interaction_cls)
+                                obj_tuning._super_affordances = tuple(affordances)
+    except Exception as e:
+        import sims4.commands
+        sims4.commands.output(f"Failed mailbox injection: {e}", sims4.commands.CheatOutput(_connection=None))
+
     global war_ticker_alarm, active_training_deployment
     if war_ticker_alarm is None:
         time_span = date_and_time.create_time_span(hours=6)
@@ -1229,6 +1315,8 @@ def _create_election_interaction():
     try:
         import sims4.resources
         interaction_manager = _get_services().get_instance_manager(sims4.resources.Types.INTERACTION)
+        if interaction_manager is None:
+            return None
         base_interaction = interaction_manager.get(VIEW_INTERACTION_ID)
 
         if base_interaction is None:
@@ -1267,21 +1355,3 @@ def _create_election_interaction():
 
     except Exception:
         return None
-
-@inject_to("sims4.tuning.instances", "HashedTunedInstanceMetaclass.__init__")
-def _inject_custom_interactions_into_objects(original, self, name, bases, namespace):
-    result = original(self, name, bases, namespace)
-
-    if not hasattr(self, '_super_affordances'):
-        return result
-
-    class_name = getattr(self, '__name__', '').lower()
-
-    if 'mailbox' in class_name or 'communityboard' in class_name or 'civicpolicy' in class_name:
-        interaction_cls = _create_election_interaction()
-        if interaction_cls is not None and interaction_cls not in self._super_affordances:
-            affordances = list(self._super_affordances)
-            affordances.append(interaction_cls)
-            self._super_affordances = tuple(affordances)
-
-    return result
