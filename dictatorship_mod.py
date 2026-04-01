@@ -435,6 +435,7 @@ def _release_from_jail(sim_id):
         sims4.commands.output(f"{sim_info.full_name} has served their jail sentence and is released.", sims4.commands.CheatOutput(_connection=None))
 
 def _war_ticker_callback(_):
+    simulate_trait_impacts()
     import random
     global active_war_zones, current_dictator_id, dictator_reputation
 
@@ -1355,3 +1356,139 @@ def _create_election_interaction():
 
     except Exception:
         return None
+
+
+
+# ==============================================================================
+# VIRTUAL TRAITS SYSTEM
+# ==============================================================================
+# Since full traits require XML tuning, we implement a "Virtual Trait" prototype
+# where Sims are assigned a trait via Python state and receive customized
+# simulated effects like buffs and relationship multipliers.
+
+virtual_traits = {}
+
+@sims4.commands.Command('dictator.add_trait', command_type=sims4.commands.CommandType.Live)
+def add_virtual_trait(sim_id: str="", trait_name: str="", _connection=None):
+    output = sims4.commands.CheatOutput(_connection)
+    try:
+        import services
+        sim_id_int = int(sim_id)
+        sim_info = services.sim_info_manager().get(sim_id_int)
+
+        if not sim_info:
+            output("Sim not found.")
+            return False
+
+        valid_traits = ['true_believer', 'paranoid', 'submissive', 'dissident', 'opportunist']
+        trait_name = trait_name.lower()
+        if trait_name not in valid_traits:
+            output(f"Invalid trait. Choose from: {', '.join(valid_traits)}")
+            return False
+
+        if sim_id_int not in virtual_traits:
+            virtual_traits[sim_id_int] = set()
+
+        virtual_traits[sim_id_int].add(trait_name)
+        output(f"Added virtual trait '{trait_name}' to {sim_info.first_name} {sim_info.last_name}.")
+        return True
+    except Exception as e:
+        output(f"Error adding trait: {e}")
+        return False
+
+@sims4.commands.Command('dictator.remove_trait', command_type=sims4.commands.CommandType.Live)
+def remove_virtual_trait(sim_id: str="", trait_name: str="", _connection=None):
+    output = sims4.commands.CheatOutput(_connection)
+    try:
+        import services
+        sim_id_int = int(sim_id)
+        sim_info = services.sim_info_manager().get(sim_id_int)
+
+        if not sim_info:
+            output("Sim not found.")
+            return False
+
+        if sim_id_int in virtual_traits and trait_name.lower() in virtual_traits[sim_id_int]:
+            virtual_traits[sim_id_int].remove(trait_name.lower())
+            output(f"Removed virtual trait '{trait_name}' from {sim_info.first_name} {sim_info.last_name}.")
+            return True
+        else:
+            output(f"Sim does not have trait '{trait_name}'.")
+            return False
+    except Exception as e:
+        output(f"Error removing trait: {e}")
+        return False
+
+@sims4.commands.Command('dictator.show_traits', command_type=sims4.commands.CommandType.Live)
+def show_virtual_traits(sim_id: str="", _connection=None):
+    output = sims4.commands.CheatOutput(_connection)
+    try:
+        import services
+        sim_id_int = int(sim_id)
+        sim_info = services.sim_info_manager().get(sim_id_int)
+
+        if not sim_info:
+            output("Sim not found.")
+            return False
+
+        traits = virtual_traits.get(sim_id_int, set())
+        if traits:
+            output(f"{sim_info.first_name} {sim_info.last_name}'s traits: {', '.join(traits)}")
+        else:
+            output(f"{sim_info.first_name} {sim_info.last_name} has no virtual traits.")
+        return True
+    except Exception as e:
+        output(f"Error showing traits: {e}")
+        return False
+
+# Function to simulate trait impacts over time (called during the war ticker or background processes)
+def simulate_trait_impacts():
+    import services
+
+    # Base game buff IDs for prototyping moodlets
+    BUFF_CONFIDENT = 12826
+    BUFF_TENSE = 12850
+    BUFF_BORED = 12823
+    BUFF_INSPIRED = 12841
+    BUFF_PLAYFUL = 12847
+    BUFF_ANGRY = 12818
+    BUFF_HAPPY = 12836
+
+    for sim_id, traits in virtual_traits.items():
+        sim_info = services.sim_info_manager().get(sim_id)
+        if not sim_info:
+            continue
+
+        for trait in traits:
+            if trait == "true_believer":
+                # Gains Confident buff representing pride in regime
+                try:
+                    sim_info.add_buff_from_op(BUFF_CONFIDENT)
+                except:
+                    pass
+            elif trait == "paranoid":
+                # Gains Tense buff representing fear of informants
+                try:
+                    sim_info.add_buff_from_op(BUFF_TENSE)
+                except:
+                    pass
+            elif trait == "submissive":
+                # Removes negative work-related buffs like bored, block playful
+                try:
+                    sim_info.remove_buff_by_type(BUFF_BORED)
+                    sim_info.remove_buff_by_type(BUFF_INSPIRED)
+                    sim_info.remove_buff_by_type(BUFF_PLAYFUL)
+                except:
+                    pass
+            elif trait == "dissident":
+                # Gains Angry buff reflecting hatred of the state
+                try:
+                    sim_info.add_buff_from_op(BUFF_ANGRY)
+                except:
+                    pass
+            elif trait == "opportunist":
+                # Gains Happy buff representing social climbing immunity
+                try:
+                    sim_info.add_buff_from_op(BUFF_HAPPY)
+                except:
+                    pass
