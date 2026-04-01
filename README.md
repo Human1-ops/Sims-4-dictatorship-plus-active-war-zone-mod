@@ -1,35 +1,37 @@
-# Sims 4 Dictatorship Mod Prototype
+# The Sims 4 Dictatorship Mod
 
-This is a very simple prototype script mod for The Sims 4 that adds "dictatorship" themed cheat commands. Since it is a Python script mod, you need to follow specific steps to install it.
+This is a pure Python script mod for The Sims 4 that allows you to play out a Dictatorship scenario, complete with military deployments, custom rules, and sham elections!
 
-## Included Features (Cheat Commands)
+## Features
 
-Open the cheat console in-game by pressing `Ctrl + Shift + C` (or `Cmd + Shift + C` on Mac).
+- **Become the Dictator**: Claim power for your active Sim and establish a regime.
+- **Rules and Punishments**: Set rules (like "no_dancing") and let the military enforce them. Rulebreakers face physical fights and potential jail time!
+- **Taxes**: Demand taxes directly into your household funds (at the cost of your reputation).
+- **The Military & Draft**: Draft sims into your army. Deployed sims will travel to offscreen "war zones" or training zones.
+- **Elections via Mailboxes & NAP Boards**: Click on any Mailbox or Community Board to hold a "Vote". The Dictator will run against a Celebrity Politician. Voter preference is influenced by their Eco Footprint and your reputation!
 
-Once the console is open, type the following commands:
+## Installation
 
-*   **`dictator.declare`**: The current Sim has been declared the Supreme Leader! (Text output)
-*   **`dictator.tax <amount>`**: Collects taxes from the peasants. It will attempt to add the specified `amount` (default is 1000) to your current household's funds. e.g., `dictator.tax 5000`
-*   **`dictator.arrest <first_name> <last_name>`**: Issues a warrant for the specified Sim. (Text output only - future feature)
-*   **`dictator.propaganda`**: Broadcasts state propaganda. (Text output only - future feature)
+1. Do **NOT** extract or unzip the `.ts4script` file!
+2. Place `dictatorship_mod.ts4script` directly into your `Documents/Electronic Arts/The Sims 4/Mods` folder.
+3. Make sure "Script Mods Allowed" is checked in your Game Options.
 
-## Installation Instructions
+## Commands
 
-For Sims 4 script mods to work, the Python `.py` file **must** be compiled into a `.pyc` file and placed inside a `.zip` archive, or left as a `.ts4script` file (which is just a renamed `.zip`).
+Open the cheat console (`Ctrl+Shift+C`) and use these commands:
 
-### Option 1: Quick Zip (if using uncompiled Python source)
-
-Sometimes the game will read uncompiled `.py` files if they are just zipped, but it is highly recommended to compile them.
-
-1.  Create a zip file containing `dictatorship_mod.py`. Let's call it `dictatorship_mod.ts4script` or `dictatorship_mod.zip`.
-2.  Place the `.ts4script` or `.zip` file into your Sims 4 Mods folder:
-    *   **Windows:** `Documents\Electronic Arts\The Sims 4\Mods`
-    *   **Mac:** `Documents/Electronic Arts/The Sims 4/Mods`
-3.  **Crucial Step:** Open The Sims 4, go to Game Options -> Other. Ensure that **both** "Enable Custom Content and Mods" AND "Script Mods Allowed" are checked.
-4.  Restart the game.
-
-### Option 2: Compiling to .pyc (Recommended for actual mods)
-
-For a fully working mod, you generally need to decompile the Sims 4 base scripts, compile your `.py` against them, and then package the `.pyc` into a `.ts4script` file. There are many tutorials online (like Andrew's Sims 4 Studio tutorials) on how to set up a proper Sims 4 Python modding environment to compile `.pyc` files.
-
-*Note: This repository currently only provides the `.py` source code file.*
+- `dictator.make_dictator [FirstName] [LastName]`: Appoints the target Sim as the Dictator.
+- `dictator.die`: Forces the current Dictator to die and triggers succession (to a child).
+- `dictator.check_reputation`: Prints the Dictator's current reputation score and title.
+- `dictator.set_rule [rule_name]`: Adds a new rule (e.g., `dictator.set_rule no_dancing`).
+- `dictator.remove_rule [rule_name]`: Revokes an active rule.
+- `dictator.break_rule [rule_name] [FirstName] [LastName]`: Simulates the target Sim breaking a rule. The military will fight them!
+- `dictator.arrest [FirstName] [LastName]`: Instantly arrests the target and despawns them for 3 Sim days.
+- `dictator.banish [FirstName] [LastName]`: Banishes (destroys) the target Sim permanently.
+- `dictator.demand_taxes [amount]`: Adds Simoleons to your household funds, lowering your reputation.
+- `dictator.hold_election`: Manually triggers an election (You can also do this by clicking the "Vote" interaction on mailboxes).
+- `dictator.declare_war`: Manually declares a new war zone in the world.
+- `dictator.draft_sim [FirstName] [LastName]`: Drafts a Sim to fight in an active war zone.
+- `dictator.deploy_training [FirstName] [LastName]`: Sends a Sim to a random world for a training deployment (they will do pushups and jog).
+- `dictator.trigger_scandal`: Forces a political scandal, severely lowering reputation.
+- `dictator.travel_to_war`: Forces the Dictator to travel to an active war zone to observe the fighting.
