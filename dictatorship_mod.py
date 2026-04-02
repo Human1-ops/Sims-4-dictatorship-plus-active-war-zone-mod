@@ -1206,12 +1206,24 @@ def inject_to(target_module_name, target_function_name):
                 target_obj = getattr(target_obj, part)
 
             final_func_name = parts[-1]
+
+            # Use inspect to determine if the original function is a class method across inheritance
+            import inspect
+            is_class_method = inspect.ismethod(getattr(target_obj, final_func_name))
+
+            # The getattr gives us the bound method if it's a classmethod, so we must unwrap it
             original_function = getattr(target_obj, final_func_name)
+            if is_class_method:
+                original_function = original_function.__func__
 
-            def _wrapper(*args, **kwargs):
-                return new_function(original_function, *args, **kwargs)
-
-            setattr(target_obj, final_func_name, _wrapper)
+            if is_class_method:
+                def _wrapper(cls, *args, **kwargs):
+                    return new_function(original_function, cls, *args, **kwargs)
+                setattr(target_obj, final_func_name, classmethod(_wrapper))
+            else:
+                def _wrapper(*args, **kwargs):
+                    return new_function(original_function, *args, **kwargs)
+                setattr(target_obj, final_func_name, _wrapper)
             logger.debug(f"Successfully injected into {target_module_name}.{target_function_name}")
             return _wrapper
         except Exception as e:
@@ -1228,13 +1240,22 @@ def _super_interaction_test_override(original_function, cls, *args, **kwargs):
 
     try:
         from event_testing.results import TestResult
+        from sims.sim_info_types import Age
         interaction_name = cls.__name__.lower()
         if "vote" in interaction_name or "civicpolicy" in interaction_name:
-            # test() is a classmethod, so we must inspect kwargs context to find the sim
+            # test() is a classmethod, so we must inspect kwargs context or args to find the sim
             context = kwargs.get('context')
+            if context is None and len(args) > 1:
+                context = args[1] # Typically (target, context, **kwargs)
+
             if context and hasattr(context, 'sim') and context.sim:
                 sim_info = context.sim.sim_info
+                # Always let the dictator pass
                 if sim_info.sim_id == current_dictator_id:
+                    return TestResult.TRUE
+
+                # If there's an active dictatorship, bypass the base game age restriction for teens
+                if sim_info.age == Age.TEEN:
                     return TestResult.TRUE
     except Exception as e:
         pass
@@ -1260,9 +1281,8 @@ def _super_interaction_on_started_hook(original_function, self, *args, **kwargs)
 
             # Otherwise, they are risking an illegal vote! 30% chance of getting caught!
             if random.random() < 0.30:
-                import sims4.commands
                 # We trigger the same logic as the dictator.illegal_vote command!
-                sims4.commands.client_cheat(f"dictator.illegal_vote \"{sim_info.first_name}\" \"{sim_info.last_name}\"", None)
+                illegal_vote(sim_info.first_name, sim_info.last_name)
     except Exception as e:
         pass
 
