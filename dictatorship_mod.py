@@ -1167,10 +1167,30 @@ def illegal_vote(first_name="", last_name="", _connection=None):
 
     sim_info = target_sim.sim_info
 
-    if sim_info.age in (Age.TEEN, Age.YOUNGADULT, Age.ADULT, Age.ELDER):
+    if sim_info.age in (Age.YOUNGADULT, Age.ADULT, Age.ELDER):
         output(f"{target_sim.full_name} tried to vote illegally! The Military has arrested them and sent them to jail for 3 Sim days.")
         if target_sim is not None:
             target_sim.destroy()
+
+    elif sim_info.age == Age.TEEN:
+        household_manager = _get_services().household_manager()
+        eligible_households = [hh for hh in household_manager.values() if hh.id != sim_info.household.id and hh.home_zone_id != 0 and len(list(hh.sim_info_gen())) < 8]
+
+        if eligible_households:
+            adoptive_household = random.choice(eligible_households)
+            current_household = sim_info.household
+            if current_household is not None:
+                current_household.remove_sim_info(sim_info)
+            adoptive_household.add_sim_info(sim_info)
+
+            output(f"{target_sim.full_name} tried to vote illegally! They have been sent to jail, and stripped from their family to be adopted by the {adoptive_household.name} household!")
+            if target_sim is not None:
+                target_sim.destroy()
+        else:
+            output(f"{target_sim.full_name} tried to vote illegally! They have been sent to jail, but no eligible households were found for adoption.")
+            if target_sim is not None:
+                target_sim.destroy()
+
     elif sim_info.age in (Age.BABY, Age.INFANT, Age.TODDLER, Age.CHILD):
         household_manager = _get_services().household_manager()
         eligible_households = [hh for hh in household_manager.values() if hh.id != sim_info.household.id and hh.home_zone_id != 0 and len(list(hh.sim_info_gen())) < 8]
