@@ -619,6 +619,8 @@ def _trigger_active_war_skirmish():
             is_military = False
             if sim_info.id in drafted_sims:
                 is_military = True
+            if sim_info.id in military_allegiances:
+                is_military = True
             if not is_military and sim_info.age in (Age.TEEN, Age.YOUNGADULT, Age.ADULT) and sim_info.career_tracker is not None:
                 for career_uid, career in sim_info.career_tracker.careers.items():
                     if career_uid == MILITARY_CAREER_TRACK_ID:
@@ -655,8 +657,19 @@ def _trigger_active_war_skirmish():
                 spawned_fighters.append(sim_info_to_spawn)
 
             def push_combat_interactions(_):
+                from sims.sim_info_types import Age
                 interaction_manager = services.get_instance_manager(sims4.resources.Types.INTERACTION)
                 fight_interaction = interaction_manager.get(FIGHT_INTERACTION_ID)
+
+                # Base game interaction for reading to child (using general chat/social if missing)
+                READ_TO_CHILD_INTERACTION_ID = 13885 # book_read_to_children
+                WATCH_TV_INTERACTION_ID = 14371 # tv_watch
+                CRYING_INTERACTION_ID = 27221 # sim_Cry
+
+                read_interaction = interaction_manager.get(READ_TO_CHILD_INTERACTION_ID)
+                tv_interaction = interaction_manager.get(WATCH_TV_INTERACTION_ID)
+                cry_interaction = interaction_manager.get(CRYING_INTERACTION_ID)
+
                 if fight_interaction is None:
                     return
 
@@ -677,8 +690,35 @@ def _trigger_active_war_skirmish():
 
                         if victim.id != fighter_sim.id:
                             context = interactions.context.InteractionContext(fighter_sim, interactions.context.InteractionContext.SOURCE_SCRIPT, interactions.priority.Priority.High)
-                            fighter_sim.push_super_affordance(fight_interaction, victim, context)
-                            sims4.commands.output(f"*** {fighter_sim.full_name} is engaging {victim.full_name} in combat! ***", sims4.commands.CheatOutput(_connection=None))
+
+                            # Branch behavior based on victim's age
+                            victim_age = victim.sim_info.age
+                            fighter_age = fighter_sim.sim_info.age
+
+                            fighter_is_dictatorship = military_allegiances.get(fighter_sim.id) == "dictatorship"
+
+                            # If the fighter is a kidnapped kid (Dictatorship allegiance), they cry!
+                            if fighter_is_dictatorship and fighter_age in (Age.BABY, Age.INFANT, Age.TODDLER, Age.CHILD, Age.TEEN):
+                                if cry_interaction:
+                                    fighter_sim.push_super_affordance(cry_interaction, fighter_sim, context)
+                                    sims4.commands.output(f"*** The dictatorship forced the youth {fighter_sim.full_name} into war, and they are crying! ***", sims4.commands.CheatOutput(_connection=None))
+                                continue
+
+                            if victim_age in (Age.BABY, Age.INFANT, Age.TODDLER, Age.CHILD):
+                                if read_interaction:
+                                    fighter_sim.push_super_affordance(read_interaction, victim, context)
+                                    sims4.commands.output(f"*** {fighter_sim.full_name} is reading a story to {victim.full_name} instead of fighting! ***", sims4.commands.CheatOutput(_connection=None))
+                                else:
+                                    sims4.commands.output(f"{fighter_sim.full_name} spared {victim.full_name} from combat due to their age.", sims4.commands.CheatOutput(_connection=None))
+                            elif victim_age == Age.TEEN:
+                                if tv_interaction:
+                                    fighter_sim.push_super_affordance(tv_interaction, victim, context)
+                                    sims4.commands.output(f"*** {fighter_sim.full_name} decided to watch TV with {victim.full_name} instead of fighting them! ***", sims4.commands.CheatOutput(_connection=None))
+                                else:
+                                    sims4.commands.output(f"{fighter_sim.full_name} spared {victim.full_name} from combat due to their age.", sims4.commands.CheatOutput(_connection=None))
+                            else:
+                                fighter_sim.push_super_affordance(fight_interaction, victim, context)
+                                sims4.commands.output(f"*** {fighter_sim.full_name} is engaging {victim.full_name} in combat! ***", sims4.commands.CheatOutput(_connection=None))
 
             time_span = date_and_time.create_time_span(minutes=10)
             alarms.add_alarm(services.current_zone(), time_span, push_combat_interactions)
@@ -711,7 +751,7 @@ def _trigger_active_war_skirmish():
 
     if independence_forces > dictatorship_forces:
         casualty_chance += 0.20
-        if random.random() < 0.40:
+        if random.random() < 0.01:
             current_zone = services.current_zone()
             if current_zone and current_zone.region and current_zone.region.guid64 in active_war_zones:
                 active_war_zones.remove(current_zone.region.guid64)
@@ -963,6 +1003,43 @@ def deploy_training(first_name="", last_name="", _connection=None):
             services.get_zone_situation_manager()._travel_to_zone(destination_zone_id, travel_sim_ids)
 
     return True
+
+@sims4.commands.Command("dictator.kidnap_children", command_type=sims4.commands.CommandType.Live)
+def kidnap_children(_connection=None):
+    output = sims4.commands.CheatOutput(_connection)
+    global current_dictator_id, military_allegiances
+
+    if current_dictator_id is None:
+        output("There is no Dictator in power to kidnap children.")
+        return False
+
+    try:
+        import services
+        from sims.sim_info_types import Age
+
+        active_household = services.active_household()
+        if not active_household:
+            output("No active household found.")
+            return False
+
+        kidnapped = 0
+        for sim_info in active_household.sim_info_gen():
+            if sim_info.sim_id == current_dictator_id:
+                continue
+
+            if sim_info.age in (Age.BABY, Age.INFANT, Age.TODDLER, Age.CHILD, Age.TEEN):
+                military_allegiances[sim_info.sim_id] = "dictatorship"
+                kidnapped += 1
+
+        if kidnapped > 0:
+            output(f"The Dictatorship has seized {kidnapped} children from the active household and forced them into the Loyalist military!")
+            return True
+        else:
+            output("No eligible babies, infants, toddlers, children, or teens found in the active household.")
+            return False
+    except Exception as e:
+        output(f"Error kidnapping children: {e}")
+        return False
 
 @sims4.commands.Command("dictator.draft_sim", command_type=sims4.commands.CommandType.Live)
 def draft_sim(first_name="", last_name="", _connection=None):
