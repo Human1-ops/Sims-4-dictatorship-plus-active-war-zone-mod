@@ -1339,7 +1339,7 @@ def _super_interaction_test_override(original_function, cls, *args, **kwargs):
         from event_testing.results import TestResult
         from sims.sim_info_types import Age
         interaction_name = cls.__name__.lower()
-        if "vote" in interaction_name or "civicpolicy" in interaction_name:
+        if "vote" in interaction_name or "civicpolicy" in interaction_name or "election" in interaction_name:
             # test() is a classmethod, so we must inspect kwargs context or args to find the sim
             context = kwargs.get('context')
             if context is None and len(args) > 1:
@@ -1369,11 +1369,15 @@ def _super_interaction_on_started_hook(original_function, self, *args, **kwargs)
     try:
         import random
         interaction_name = self.__class__.__name__.lower()
-        if "vote" in interaction_name or "civicpolicy" in interaction_name:
+        if "vote" in interaction_name or "civicpolicy" in interaction_name or "election" in interaction_name:
             sim_info = self.sim.sim_info
 
             # The dictator is exempt.
             if sim_info.sim_id == current_dictator_id:
+                return
+
+            # Custom election holds its own logic, don't penalize it as an illegal NAP vote.
+            if "election" in interaction_name:
                 return
 
             # Otherwise, they are risking an illegal vote! 30% chance of getting caught!
@@ -1412,6 +1416,25 @@ def _hook_zone_spin_up(original_function, self, *args, **kwargs):
         sims4.commands.output(f"Failed mailbox injection: {e}", sims4.commands.CheatOutput(_connection=None))
 
     global war_ticker_alarm, active_training_deployment
+
+    if getattr(self, '_dictatorship_mod_welcome_shown', False) is False:
+        try:
+            import ui.ui_dialog_notification
+            import sims4.localization
+
+            client = _get_services().client_manager().get_first_client()
+            if client and client.active_sim:
+                localized_title = sims4.localization._create_localized_string(0x61AE64E0) # Just a placeholder
+                localized_title = sims4.localization.create_tokens("Welcome")[0] if not localized_title else localized_title
+
+                # Unfortunately without custom string tables, we can't fully localize a custom message in python cleanly,
+                # so we push it directly to the cheat console or standard notification where possible.
+                sims4.commands.client_cheat("echo \"Welcome to Dictatorship Plus Active War Mod!\"", client.id)
+                sims4.commands.output("Welcome to Dictatorship Plus Active War Mod!", sims4.commands.CheatOutput(_connection=client.id))
+        except Exception:
+            pass
+        setattr(self, '_dictatorship_mod_welcome_shown', True)
+
     if war_ticker_alarm is None:
         time_span = date_and_time.create_time_span(hours=6)
         war_ticker_alarm = alarms.add_alarm(self, time_span, _war_ticker_callback, repeating=True)
